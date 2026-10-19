@@ -5,7 +5,7 @@ from app.core.config import get_settings
 from app.core.database import get_session
 from app.features.leagues.contracts import LeagueImportResult, LeagueResponse, LeagueTeamResponse
 from app.features.leagues.service import get_imported_leagues, import_manager_leagues
-from app.services.yahoo.normalization import normalize_yahoo_settings
+from app.services.yahoo.normalization import normalize_yahoo_draft_pick_time, normalize_yahoo_settings
 
 router = APIRouter(prefix="/api/v1/leagues", tags=["Leagues"])
 single_league_router = APIRouter(prefix="/api/v1/league", tags=["Leagues"])
@@ -29,6 +29,10 @@ def _response(league) -> LeagueResponse:
         league_key=league.league_key,
         league_name=league.league_name,
         season=league.season,
+        draft_pick_time_seconds=(
+            normalize_yahoo_draft_pick_time(league.league_key, settings.source_payload)
+            if settings else None
+        ),
         scoring_settings=scoring_settings,
         roster_positions=roster_positions,
         teams=[

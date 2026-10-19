@@ -207,6 +207,23 @@ def normalize_yahoo_settings(
     )
 
 
+def normalize_yahoo_draft_pick_time(
+    league_key: str,
+    settings_response: dict[str, Any],
+) -> int | None:
+    settings_records = extract_yahoo_records(settings_response, "league", "league_key")
+    settings_record = next(
+        (item for item in settings_records if str(item.get("league_key")) == league_key),
+        settings_records[0] if settings_records else {},
+    )
+    raw_value = _merge_settings(settings_record.get("settings")).get("draft_pick_time")
+    try:
+        seconds = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if 1 <= seconds <= 3600 else None
+
+
 def normalize_yahoo_league(
     game_key: str,
     league: dict[str, Any],

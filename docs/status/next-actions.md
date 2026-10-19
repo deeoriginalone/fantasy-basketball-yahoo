@@ -1,28 +1,77 @@
 # Next Actions
 
-## Current Boundary
+Only unresolved work is listed. The draft-era baseline is closed; preserve the
+draft module, persisted history, and fallback workflows rather than deleting
+them. The primary roadmap is now **Championship HQ**. Everything below is
+future work, not a claim of implemented post-draft capability.
 
-The owner-approved scope includes persisted live draft state and a versioned API. Preserve Yahoo identity authority and fail-closed data behavior. No new provider or scraping is approved. The repository has no frontend; the requested live Draft page remains an implementation gap despite backend authorization.
+## Championship HQ - Ordered Roadmap
 
-## Operational Follow-up
+1. **Championship foundation / Yahoo post-draft state.** Establish an
+   authoritative, persisted current-season league/team/roster baseline from
+   authorized Yahoo state, including scoring, roster eligibility, and available
+   matchup/transaction context. Define refresh/freshness and missing-data
+   contracts; verify source-to-storage-to-read behavior in isolation before
+   product claims. Never substitute draft-session picks for Yahoo's actual
+   post-draft roster. Confirm the real league's draft state rather than assuming
+   completion from this baseline.
+2. **Category + team identity engine.** Deterministically explain roster
+   strengths, weaknesses, category direction, and constraints from verified
+   settings and persisted inputs; support the league's actual scoring format
+   without inventing category evidence.
+3. **Schedule utilization.** Persist authorized schedules and explain playable
+   games, congestion, off-night opportunities, and roster-slot constraints.
+4. **What Changed? + Action Center.** Turn verified state/data changes into
+   prioritized roster/matchup actions with source freshness, rationale, and
+   explicit uncertainty; do not lead with disconnected statistics.
+5. **Player projections + Start/Sit.** Define reproducible backend projection
+   inputs/methods and lineup constraints; evaluate against held-out outcomes.
+   Distinguish projections from historical averages and heuristic scores.
+6. **Streaming + Waivers.** Rank feasible pickups/drops using roster needs,
+   schedule, league rules, and known acquisition constraints; explain the
+   decision and opportunity cost without fabricating availability.
+7. **Opponent/matchup intelligence.** Use authoritative opponent rosters and
+   matchup state to explain strengths, exploitable gaps, and counter-actions.
+8. **Trade engine.** Evaluate both roster impacts, league constraints,
+   alternatives, and uncertainty; no unsupported acceptance probabilities.
+9. **League intelligence.** Explain league-wide trends, roster behavior, and
+   competitive context using authorized persisted evidence.
+10. **Decision Journal.** Productize an audit/learning layer recording action,
+    alternatives, inputs, rationale, model version, and eventual outcomes.
+    Existing draft events/snapshots remain intact; earlier decision surfaces
+    must retain enough provenance for this journal.
+11. **Playoff + Championship engine.** Combine verified format, schedule,
+    roster, opponent, and decision inputs into explainable scenario planning.
+12. **Calibrated probabilities only after historical validation.** Obtain
+    suitable historical state/outcomes, prevent leakage, and evaluate held-out
+    calibration before displaying probability claims. Until then label
+    heuristics/scenarios explicitly; unknown remains unknown.
 
-- Refresh NBA teams, players, schedules, and the recent game-log window through `POST /api/v1/nba/import`; choose and document an operational cadence before scheduling automatic imports.
-- Refresh league draft metrics with `POST /api/v1/draft/metrics` after NBA statistics or Yahoo scoring/roster settings change; utility requests also recompute metrics from PostgreSQL.
-- For stateless evaluation, continue using `POST /api/v1/draft/utility`. For persisted drafts, create a v2 session with a complete explicit team-slot map, then use v2 read/pick/correction/undo and target routes. Pass the current version on each update. Picks must arrive in overall order and use internal IDs from the Yahoo league pool.
-- Run `python -m app.services.draft.market_sync --season 2026-27` after deployment/rebuild and periodically during draft season. The job is idempotent, uses the documented Fantrax REST API, and leaves old good rows untouched on fetch failure.
-- Inspect provider counts, match rejection, coverage, and retrieval freshness using `python -m app.services.draft.market_diagnostics --season 2026-27`.
-- Fantrax has no published sample size/frequency or source update timestamp. Treat local retrieval age as freshness; data older than 48 hours yields unknown survival. Do not substitute rankings, ownership, XRank, or projections.
-- Fantrax terms allow personal use through published interfaces but prohibit scraping; this app does not redistribute data. Re-check and obtain written permission before any broader use.
-- Current verified source ceiling is 312 matched ADP rows (42.56% of 733 identities); 399 identities are absent from Fantrax and 22 returned records are unresolved. No additional free feed with documented access and verified automated-use permission was found. Keep missing ADP unknown; revisit only when a qualifying source or written permission becomes available.
-- Provide real historical pick order/state, matching ADP snapshots, and completed-season outcomes before claiming historical draft validation or outperformance. The linked prior Yahoo league is inaccessible (403); no synthetic results should substitute.
-- Use the returned `draft_timing.picks_until_next_turn` and run summary to understand timing pressure. Run detection uses the latest ten picks and is a heuristic, not a statistical trend model.
-- Interpret survival as `heuristic_unvalidated` and decision confidence as low/unavailable; no calibration dataset exists. The v2 action compares current utility with expected fallback utility, assumes independent heuristic survival and unchanged utility, and leaves missing/stale survival unknown.
-- Fantrax provides no draft-frequency field; keep frequency null and omit its optional survival adjustment rather than infer it.
-- To complete historical validation, supply actual prior draft picks/order, ADP snapshots, and season outcomes. Yahoo returned 403 for linked previous-season league `466.l.51267`; do not substitute synthetic records or claim historical outperformance.
-- Select `balanced`, `upside`, or `safe` when creating the v2 session. Review the stored recommendation snapshot, missing/stale diagnostics, fallback branches, position need, scarcity, and run signal.
-- Review whether 43 unmapped Yahoo players and 32 mapped players without usable season stats need better source coverage. Leave them unscored until authoritative data is available.
-- Monitor NBA source coverage and the one unresolved exhibition opponent; retain raw source evidence and do not infer team identity.
-- Run migration downgrade only against a disposable database; downgrade removes all persisted v2 draft sessions, picks, events, snapshots, and targets. Legacy Yahoo/NBA schema still has no baseline migration.
-- The next product batch is frontend implementation plus validated category, scarcity-tier, opponent-demand, room-intelligence, and alert calculation boundaries. Do not present these as implemented until the required data contracts and tests exist.
+## Product and Decision Contracts
 
-Projections, waivers, trades, matchup analysis, news, season management, AI summaries, calibrated survival, simulation, and retrospective process/outcome scoring remain deferred.
+- **Yahoo:** fantasy-league truth for identities, configuration, and state.
+- **Persisted NBA / authorized external data:** basketball inputs, with
+  provenance, coverage, and freshness; reads/calculations do not silently import.
+- **Backend:** deterministic calculations, projections, simulation, and
+  decisions, with explicit method/version and uncertainty boundaries.
+- **Frontend:** prioritized actions and explanations, not a second calculation
+  engine.
+- **Decision history:** audit and learning, not retrospective proof of accuracy.
+
+**Hard rule:** Never surface a statistic as a primary result without explaining
+why it matters to this roster/matchup and what decision it informs.
+
+## Draft Follow-up
+
+- At the next authorized active draft, separately accept official Yahoo
+  `draftresults`, mapping/cadence, pause/resume, conflict and recovery behavior,
+  plus Quick Record/correction/undo in a safe disposable browser session.
+  Windows mock acceptance does not validate Production Live. Preserve official
+  polling and manual fallback; do not enable browser-based Live writes without
+  separate review/acceptance.
+- Resolve unscored identities and improve partial ADP coverage only through
+  authoritative mappings and permitted sources. Recheck stale/import-based
+  inputs when the draft module is used; never fill gaps by inference.
+- Historical draft evaluation/calibration remains blocked on contemporaneous
+  picks, ADP, and outcomes. Keep wait/survival uncalibrated and opponent demand
+  unavailable until supported by verified data and validation.

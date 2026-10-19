@@ -216,6 +216,16 @@ def test_player_identity_create_update_deduplicate_and_roster_persistence(monkey
                 assert identities[0].nba_player_id is None
                 assert identities[0].espn_player_id is None
                 assert identities[0].status is None
+                identity_id_before = identities[0].id
+                identities[0].nba_player_id = "retained-nba-identity"
+                await session.commit()
+                player_state["status"] = "O"
+                refreshed = await import_yahoo_players(session, settings, league_key, FixtureYahooClient())
+                await session.refresh(identities[0])
+                assert refreshed.updated_count == 1
+                assert identities[0].status == "O"
+                assert identities[0].id == identity_id_before
+                assert identities[0].nba_player_id == "retained-nba-identity"
                 assert identities[0].updated_at >= updated_at_before
                 assert player_rows == 2
                 assert roster_rows == 1

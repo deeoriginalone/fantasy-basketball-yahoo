@@ -36,13 +36,47 @@ def test_draft_migration_up_down_up_uses_version_table_and_new_tables() -> None:
                     "SELECT to_regclass('public.draft_sessions')"
                 )) == "draft_sessions"
                 assert await connection.scalar(text(
-                    "SELECT revision FROM schema_migrations"
-                )) == "0001_draft_persistence"
+                    "SELECT revision FROM schema_migrations ORDER BY revision DESC LIMIT 1"
+                )) == "0006_observer_connections"
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.observer_connections')"
+                )) == "observer_connections"
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.draft_sync_states')"
+                )) == "draft_sync_states"
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.draft_mock_batches')"
+                )) == "draft_mock_batches"
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.draft_mock_runs')"
+                )) == "draft_mock_runs"
+                assert await connection.scalar(text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='draft_mock_runs' AND column_name='evaluation')"
+                )) is True
+                assert await connection.scalar(text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='draft_sessions' AND column_name='draft_source')"
+                )) is True
+                assert await connection.scalar(text(
+                    "SELECT is_nullable = 'YES' FROM information_schema.columns "
+                    "WHERE table_name='draft_sessions' AND column_name='draft_position'"
+                )) is True
+                assert await connection.scalar(text(
+                    "SELECT is_nullable = 'YES' FROM information_schema.columns "
+                    "WHERE table_name='draft_picks' AND column_name='team_key'"
+                )) is True
 
             async with test_engine.begin() as connection:
                 await downgrade(connection)
                 assert await connection.scalar(text(
                     "SELECT to_regclass('public.draft_sessions')"
+                )) is None
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.observer_connections')"
+                )) is None
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.draft_mock_batches')"
                 )) is None
 
             async def apply_revision() -> None:
@@ -54,6 +88,9 @@ def test_draft_migration_up_down_up_uses_version_table_and_new_tables() -> None:
                 assert await connection.scalar(text(
                     "SELECT to_regclass('public.draft_targets')"
                 )) == "draft_targets"
+                assert await connection.scalar(text(
+                    "SELECT to_regclass('public.draft_mock_runs')"
+                )) == "draft_mock_runs"
         finally:
             await test_engine.dispose()
             database.engine = original_engine

@@ -1,57 +1,115 @@
 # Project Memory
 
-## Product and Boundaries
+## Product Boundaries
 
-- This greenfield repository is separate from the NFL/Fantasy Intelligence project.
-- Yahoo Fantasy API is the source of truth for manager leagues, NBA game key, teams, and league rules/settings.
-- Current foundations are the verified Yahoo integration, NBA ingestion/storage, stateless v1 draft utility, and v2 persisted draft sessions/API. The user authorized a live Draft page, but this repository contains no frontend project; the page is not implemented.
-- Draft flow: Yahoo player pool -> internal identity <- NBA player/stat data -> league-scoring metrics -> snake timing, run and availability context -> roster/mode utility. Runtime calculations read PostgreSQL only. V1 accepts request ADP/recent picks; v2 derives picks from persisted session state and uses fresh stored market ADP.
-- The existing Yahoo pool payload has no ADP, draft rank, XRank, or ownership fields, and no draft history. Never infer ADP or claim calibrated survival probabilities. Without caller-supplied ADP, leave next-pick survival and ADP-based availability null and report missing IDs.
-- `draft_market_data` stores optional ADP, draft rank, draft frequency, source, and update timestamp by internal player/season/source. Fantrax is the selected personal-use source through documented `getAdp` and `getPlayerIds` endpoints. Sync with `python -m app.services.draft.market_sync --season YYYY-YY`; diagnostics with `python -m app.services.draft.market_diagnostics --season YYYY-YY`. The Fantrax feed supplies ADP only; rank/frequency/sample size/source update time remain null. Never scrape Fantrax pages or redistribute its feed; see ADR 0004.
-- Market data is keyed to `player_identity.id`; never overwrite `player_identity` from an ADP feed. Fantrax matches require unique normalized full name, current team, and position; ambiguous/missing-team players remain unresolved. Utility priority is request ADP, then fresh Fantrax ADP, then unknown. Stored ADP older than 48 hours is stale and not used for survival.
-- Draft timing: `market_value_delta = ADP - current_pick_number`; positive means reach, negative means the player fell past market ADP. Reach/fall indices are 0-100, scaled to one league round, descriptive only. `miss_risk_score = 100 * (1 - survival_probability)`. `wait_utility_now` is roster utility plus mode adjustment, excluding the direct run bonus; `expected_loss_if_gone = max(0, wait_utility_now)`. Expected wait cost is `U_now - [P_survive * U_now + P_gone * E_fallback]`, signed and null when player/fallback survival is unavailable. The best roster-fit and highest positive wait-cost choices can differ. Fantrax draft frequency/rank remain null. Opponent roster demand is unavailable; never infer it. Survival stays `heuristic_unvalidated`.
-- Verified 2026-10-10 source coverage is 312/733 identities (42.56%); 399 are absent from Fantrax and 22 source rows are unresolved (2 no-name, 11 position mismatch, 9 missing team). ESPN automation is disallowed by Disney terms absent express written permission; Sleeper's official docs did not establish NBA ADP. No other qualifying free feed is verified; never fill gaps with rankings/projections or guessed ADP.
-- Yahoo's linked prior-season league/draftresults endpoint returned 403; no historical draft state/outcome is stored locally. Do not claim historical superiority until actual draft-pick/ADP/outcome data is supplied and replayed.
-- The user has authorized the live Draft UI, but this repository has no frontend project, so that page is not implemented. Waivers, trades, matchup analysis, alerts, news, season management, and AI summaries remain outside scope without separate approval.
+- Yahoo is authoritative for fantasy-league/player identity, configuration,
+  and state. `player_identity.id` is the internal cross-feature key; market
+  feeds never overwrite Yahoo identity fields.
+- Persisted NBA and authorized external data provide basketball inputs.
+  Persist inputs before calculations; a gateway HTTP result alone is not
+  evidence of successful persistence. Missing/stale data stays unavailable.
+- The backend owns deterministic calculations, projections, simulation, and
+  decisions. The frontend presents prioritized actions and explanations, not
+  duplicate calculation logic. Future projections/simulation require explicit
+  methods and validation; draft heuristics do not establish those capabilities.
+- Decision history is the audit/learning layer. Preserve input/source evidence,
+  versions, alternatives, and uncertainty; do not equate an audit trail with
+  proven decision accuracy.
+- Never surface a statistic as a primary result without explaining why it
+  matters to this roster/matchup and what decision it informs.
+- Draft functionality and persisted history are preserved modules after the
+  final draft-era baseline. Championship HQ is the post-draft direction, not
+  an already implemented or validated product.
 
-## Integration Architecture
+## Canonical Draft Architecture
 
-- Reuse `backend/app/features/yahoo/oauth.py` for OAuth code exchange, encrypted credential storage, and expiry-based refresh. Token encryption uses `backend/app/core/security.py`; database access uses `backend/app/core/database.py`.
-- `backend/app/services/yahoo/` owns Yahoo HTTP calls, NBA game-key discovery, league/settings/team retrieval, and Yahoo response normalization.
-- `backend/app/features/leagues/` owns typed application contracts, PostgreSQL persistence, and league read/import routes.
-- PostgreSQL owns `yahoo_credentials`, `leagues`, `league_settings`, and `teams`. Preserve Yahoo source payloads and do not invent values for missing league settings.
-- Imports are idempotent by Yahoo keys and replace a league's team snapshot transactionally.
-- Yahoo resource GETs retry transient transport, 429, and 5xx failures with bounded backoff; logs carry structured path/status metadata and never include tokens.
-- OAuth callback persists encrypted tokens and starts the initial league import; `POST /api/v1/leagues/import` supports later retries.
-- `backend/app/services/yahoo/players.py` reads all player pages and each imported Yahoo team's roster; it uses the existing OAuth/token service and Yahoo HTTP client.
-- `player_identity.id` is the internal player ID and `yahoo_player_id` is the required unique source key. NBA and ESPN IDs remain nullable until authoritative mapping sources exist.
-- `players` stores per-league Yahoo observations; `fantasy_teams` mirrors existing `teams`; `rosters` links fantasy teams to internal player identities. Snapshot refresh and identity changes are transactional and idempotent.
-- `backend/app/services/nba/` owns the `nba_api` adapter and team, player, schedule, and recent game-log imports. Persist source records in `nba_teams`, `players_nba`, `nba_games`, `player_game_logs`, and `player_schedule`.
-- `POST /api/v1/nba/import` fetches teams, current-season players, season schedule, then recent regular/preseason player game logs; all writes run transactionally and are idempotent. External calls are import-only; database reads never invoke `nba_api`.
-- NBA identity linking fills only null `player_identity.nba_player_id` values when normalized full name and known team abbreviation match uniquely on both sides. Never change Yahoo IDs or Yahoo-derived identity fields; leave ambiguous/unmatched links null.
-- Preserve unknown or TBD schedule-team references as null normalized team IDs with the original `nba_games.source_payload` intact; report nonzero unresolved references in the import result.
-- `nba_player_season_stats` stores Base per-game production, Advanced minutes/usage, and starter-filter starts by NBA player, season, and season type. Import prior completed regular season plus current regular/preseason snapshots.
-- `backend/app/services/draft/metrics.py` derives league-specific per-game fantasy value from Yahoo point weights, replacement value from roster-slot demand, positional scarcity from demand versus eligible supply, durability from games played, risk from durability/start rate, and upside from usage/minutes percentiles.
-- `backend/app/services/draft/utility.py` scores supplied or persisted available players against the drafted roster and Yahoo roster slots. The formula is a transparent heuristic, not a predictive projection model.
-- Snake turn timing uses the manager's 1-based draft position, current round, league team count, and alternating round direction. Run detection examines the last 10 caller-supplied picks; an active group needs at least 3 picks and 30% of the window. Run pressure adjusts the mode-adjusted utility.
-- `balanced`, `upside`, and `safe` modes change only the utility adjustment; the selected player still uses league metrics, roster need, replacement, scarcity, and fixed/flex slot fit. Utility returns one best roster pick and one at-risk value before the next turn, not a full ranked list.
-- v1 draft utility remains stateless. v2 `draft_sessions`, `draft_picks`, `draft_pick_events`, `draft_recommendation_snapshots`, and `draft_targets` persist session state. Picks are sequential; team slots are explicit input; identical retries are idempotent; stale versions conflict; corrections/undo append audit events. Player IDs must belong to the imported Yahoo pool. Unmapped/unscored players remain unscored.
-- v2 expected wait cost is `U_now - [P_survive * U_now + P_gone * E_fallback]`. `E_fallback` estimates the best of up to five scored alternatives under independent, uncalibrated survival estimates; utility is held constant through intervening picks. Positive means `draft_now`, zero/negative means `wait`, and missing required survival means `insufficient_evidence`. Confidence stays low or unavailable; never call it calibrated.
-- Player/roster read routes return PostgreSQL data only. Missing Yahoo status stays null; never infer health from absence.
-- Pre-draft rosters may be empty. Accept only structurally valid Yahoo collections with an explicit zero count; still persist fantasy teams and the separately fetched player pool. Reject malformed/contradictory collections before deleting or replacing snapshots. Re-import after the draft populates rosters idempotently.
-- Normalized scoring categories join Yahoo's own stat IDs/names/weights; keep the full Yahoo settings response as the source payload. Never hardcode a league's scoring weights or roster positions.
-- Uvicorn access logging is disabled so OAuth callback query parameters are not written to request logs. Never print or log credentials, OAuth state, authorization codes, or tokens.
-- Legacy tables still use SQLAlchemy metadata bootstrap. New v2 draft tables are excluded from `create_all()` and created by tracked revision `backend/app/core/migrations.py`. Apply with `python -m app.core.migrations upgrade`; `downgrade base` deletes v2 draft state. The legacy schema still lacks a baseline migration.
+- Reuse normalization/reconciliation, session row locks, sequential pick
+  handling, optimistic versions, conflicts, audit events, and recommendation
+  snapshots. No parallel reconciler or "fastest source wins" behavior.
+- v1 utility is stateless. v2 persists sessions/picks/targets and calculation
+  snapshots; mutation/version contracts remain canonical. Corrections and
+  latest-pick undo use the existing event/snapshot pipeline.
+- Global picks determine availability/run context; only manager selections
+  populate manager-roster inputs. Opponent selections are not manager demand.
+- Ordinary session creation requires a complete explicit team-slot map.
+  Live creation permits pending manager position and partial mapping;
+  first-round authoritative picks discover order, later rounds validate known
+  slots, and manager timing/recommendations require explicit slot confirmation.
+  Unknown team identities are not invented. Order conflicts preserve evidence
+  and stop automatic discovery until explicit resolution.
+- Internal Mock Live Draft, synthetic Mock Sync Rehearsal, Yahoo Mock Practice,
+  and Production Live are separate workflows. Internal mocks are seeded,
+  rule-based practice; they do not mutate Yahoo state. Mock/practice evidence
+  never validates Production Live.
+- Production Live uses authenticated Yahoo `draftresults`, Sync Now,
+  pause/resume, Quick Record/manual fallback, and conflict protection.
+  Active-draft provider acceptance remains unverified; polling is not push
+  streaming and the application interval is not a Yahoo-approved cadence.
 
-## Operational Notes
+## Read-Only Browser Observer
 
-- Configure secrets in an ignored local `.env` or deployment secret store; `.env.example` contains placeholders only. Never copy real credentials into example files or documentation.
-- Yahoo's registered redirect URI must exactly match `YAHOO_REDIRECT_URI` and `/api/v1/yahoo/oauth/callback`.
-- Docker Compose binds the API to `0.0.0.0:${API_PORT:-18002}` for trusted LAN access; the default callback uses the same port. Keep `YAHOO_REDIRECT_URI` and Yahoo developer-console callback registration aligned. Port 8000 may be occupied by Portainer on this host.
-- The Compose API port is plain HTTP. If `YAHOO_REDIRECT_URI` uses HTTPS, TLS must terminate at the callback host/port and forward internally to Uvicorn. Never configure an HTTPS callback to the raw HTTP mapping or claim OAuth is verified from a redirect alone.
-- Yahoo OAuth, the HTTPS callback, encrypted access/refresh storage, token refresh, Fantasy Sports authorization, and live Yahoo imports are verified for league `478.l.50505`.
-- NBA Data Foundation live import is verified for season `2026-27`: 30 teams, 615 current-source players plus 1 game-log-only player, 1,274 games, 720 recent logs, 51,048 player schedule rows, and 608 unique Yahoo identity links. One source-reported non-NBA schedule opponent is preserved as unresolved.
-- Draft readiness is live-verified for Yahoo league `478.l.50505`: 717 `players_nba` records, 1,054 season-stat snapshots, 658 league-specific metrics, and a manager-team utility request successfully returned a roster-specific pick. 43 Yahoo pool players lack NBA IDs and 32 mapped players lack eligible stats; both groups remain unscored.
-- The API has no general user authentication. Do not expose the LAN binding beyond trusted networks or publicly; network firewalling remains an operational boundary.
-- Verify OAuth/league network calls with mocked responses unless real credentials and an authorized account are explicitly available. Never claim a live Yahoo import based only on mocks.
-- Keep `docs/status/current-state.md`, `docs/status/next-actions.md`, and the dated session note current for every completed coding task.
+- One-time Windows install/pair; subsequent mocks use Yahoo draft URL + Connect.
+  Dedicated Windows Chrome exposes CDP only on `127.0.0.1`, never the LAN.
+  Do not assume Linux loopback reaches Windows.
+- The observer reads authoritative Yahoo Picks player IDs and sends bounded
+  observations over trusted HTTPS through the existing reconciler into
+  disposable Yahoo Mock Practice. It never selects/submits Yahoo players.
+  Browser-based Production Live writes are not enabled or verified.
+- Missing/ambiguous evidence fails closed. Use a verified single-slot fallback
+  when necessary; do not guess opponent mappings, rounds, or team count.
+  The current practice bridge supports 12-team mocks and requires verified
+  rounds and manager slot before initialization.
+- Normal operation is windowless/background with bounded sanitized logs;
+  diagnostics are not the normal operator workflow. After pairing, normal
+  users do not hand off session IDs or re-enter credentials for every draft.
+
+## Recommendation Invariants and Verified Limitations
+
+- BEST PICK NOW ranks current adjusted roster value using historical
+  Yahoo-weighted production, replacement value, scarcity/need, construction,
+  durability, risk, upside, and recent run context. WAIT ANALYSIS is a separate
+  ADP/survival/fallback decision; ADP does not directly determine BEST PICK NOW.
+- Roster matching prioritizes starting positions before UTIL/bench and credits
+  newly filled slots through incumbent reassignment. UTIL/bench credit is
+  bounded; open UTIL/bench does not create positional need. Current board reads
+  can recalculate legacy roster-fit results without rewriting old snapshots.
+- Why this rank explains manager-roster score/rank contributions, not
+  predictive accuracy. Historical production is not a future-season
+  projection; small score differences do not prove real-world superiority.
+- Yahoo O/Out and NA/Not Active are excluded from normal recommendations,
+  best value at risk, and wait/fallback candidates. Q/P remain eligible with
+  uncertainty. Blank/unrecognized status is unknown, never confirmed healthy.
+  Historical metrics remain visible; no injury penalty or return forecast is
+  inferred. Status refresh is player-pool-import-based, not continuous.
+- Missing mappings/statistics leave players unscored; preseason samples remain
+  explicitly distinguishable from regular-season inputs.
+- Fantrax supplies partial ADP coverage, not draft rank, XRank, frequency,
+  sample size, or an upstream source-updated timestamp. Retrieval age is the
+  available freshness signal; the application stale threshold is 48 hours.
+- Survival/wait estimates are uncalibrated heuristics. Opponent roster demand,
+  category calculations, Monte Carlo forecasts, historical outperformance,
+  and post-draft championship/projection accuracy are not established.
+- Later Windows mock acceptance does not resolve unverified Production Live
+  source or full manual fallback/recovery browser acceptance.
+
+## Migrations and Operational Safety
+
+- Draft tables have versioned transactional migrations through
+  `0006_observer_connections`, separate from legacy metadata bootstrap.
+  Migration up/down/up is tested only on isolated PostgreSQL.
+- Production downgrade is destructive: it removes draft sessions, picks,
+  events, snapshots, and targets. Never validate with a production downgrade.
+  Take a fresh private backup and obtain change approval before deployment or
+  migration; preserve pre-existing draft and identity state.
+- NBA imports precede metric recomputation; ordinary reads/calculations use
+  persisted inputs. The 600-second proxy timeout is scoped to the exact
+  NBA-import route, not all APIs.
+- Do not re-import providers or mutate production for documentation validation.
+  Do not bypass TLS validation. The API has no general user authentication and
+  must remain on a trusted network.
+- Keep credentials, observer secrets, private backups, operational
+  fingerprints, and sensitive runtime values out of source control and reports.
+
+See [current state](status/current-state.md) for dated evidence,
+[next actions](status/next-actions.md) for unresolved work, and the
+[final draft-era session record](sessions/2026-10-18.md) for closeout history.

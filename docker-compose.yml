@@ -16,6 +16,8 @@ services:
   api:
     build:
       context: ./backend
+    volumes:
+      - ./scripts/yahoo-observer:/opt/court-iq-observer:ro
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fantasy_gm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-fantasy_gm}
       YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
@@ -23,9 +25,24 @@ services:
       YAHOO_REDIRECT_URI: ${YAHOO_REDIRECT_URI:-http://localhost:${API_PORT:-18002}/api/v1/yahoo/oauth/callback}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      COURT_IQ_OBSERVER_SECRET: ${COURT_IQ_OBSERVER_SECRET:-}
+      COURT_IQ_OBSERVER_PRACTICE_SESSION: ${COURT_IQ_OBSERVER_PRACTICE_SESSION:-}
+      COURT_IQ_OBSERVER_LEAGUE_KEY: ${COURT_IQ_OBSERVER_LEAGUE_KEY:-}
+      COURT_IQ_OBSERVER_ORIGIN: ${COURT_IQ_OBSERVER_ORIGIN:-}
+      COURT_IQ_OBSERVER_PRACTICE_WRITES: ${COURT_IQ_OBSERVER_PRACTICE_WRITES:-false}
+      COURT_IQ_OBSERVER_MOCK_ROUNDS: ${COURT_IQ_OBSERVER_MOCK_ROUNDS:-}
     depends_on:
       db:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_LIVE_DRAFT_POLL_INTERVAL_MS: ${LIVE_DRAFT_POLL_INTERVAL_MS:-60000}
+    depends_on:
+      api:
+        condition: service_started
 
   caddy:
     image: caddy:2-alpine
@@ -39,7 +56,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      api:
+      frontend:
         condition: service_started
 
 volumes:

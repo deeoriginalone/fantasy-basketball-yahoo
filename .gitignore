@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 caddy-root.crt
 *.py[cod]
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

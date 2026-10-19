@@ -214,6 +214,29 @@ def test_metrics_use_yahoo_points_and_utility_is_roster_specific() -> None:
                     recent_pick_player_ids=[identity.id for identity in identities[2:5]],
                 )
                 result = await calculate_draft_utility(session, request)
+                empty_roster = await calculate_draft_utility(
+                    session, request, manager_drafted_player_ids=[],
+                )
+                repeat_empty = await calculate_draft_utility(
+                    session, request, manager_drafted_player_ids=[],
+                )
+                without_opponents = await calculate_draft_utility(
+                    session, request.model_copy(update={"drafted_player_ids": []}),
+                    manager_drafted_player_ids=[],
+                )
+                assert empty_roster.best_pick == repeat_empty.best_pick
+                assert [
+                    (row.player_identity_id, row.decision_score)
+                    for row in empty_roster.ranked_players
+                ] == [
+                    (row.player_identity_id, row.decision_score)
+                    for row in without_opponents.ranked_players
+                ]
+                assert empty_roster.best_pick is not None
+                assert empty_roster.best_pick.positional_need_score != result.best_pick.positional_need_score
+                assert {row.player_identity_id for row in empty_roster.ranked_players}.isdisjoint(
+                    request.drafted_player_ids
+                )
                 assert result.best_pick is not None
                 assert result.best_pick.player_identity_id == center_identity.id
                 assert result.best_pick.player_name == "Roster Fit Center"

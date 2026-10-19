@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.draft.contracts import (
     DraftPlayerAvailability,
+    DraftBoardPlayer,
     DraftRun,
+    DraftRosterPlayer,
+    DraftRosterSlot,
+    DraftRosterView,
+    DraftRosterImpact,
     DraftTiming,
     DraftWaitFallback,
     DraftUtilityPick,
@@ -18,8 +23,10 @@ from app.features.draft.models import DraftMarketData, DraftPlayerMetric
 from app.features.leagues.models import LeagueSettings, Team
 from app.features.players.models import LeaguePlayer, PlayerIdentity
 from app.services.draft.market_sync import MARKET_STALE_AFTER
+from app.services.draft.player_status import YAHOO_STATUS_LABELS, recommendation_eligibility, yahoo_status_reason
 
 CORE_POSITIONS = {"PG", "SG", "SF", "PF", "C"}
+ROSTER_FIT_VERSION = 2
 MARKET_SOURCE_PRIORITY = ("fantrax",)
 SURVIVAL_DECISION_THRESHOLD = 0.5
 POSITION_GROUPS = {
@@ -73,26 +80,31 @@ def _expanded_slots(roster_positions: list[dict]) -> list[str]:
 
 
 def _maximum_slot_matching(player_positions: list[set[str]], slots: list[str]) -> dict[int, int]:
-    slot_to_player: dict[int, int] = {}
-
-    def assign(player_index: int, seen_slots: set[int]) -> bool:
-        for slot_index, slot in enumerate(slots):
-            if slot_index in seen_slots or not _slot_accepts(slot, player_positions[player_index]):
-                continue
-            seen_slots.add(slot_index)
-            previous_player = slot_to_player.get(slot_index)
-            if previous_player is None or assign(previous_player, seen_slots):
-                slot_to_player[slot_index] = player_index
-                return True
-        return False
-
-    order = sorted(
+    player_to_slot: dict[int, int] = {}
+    players = sorted(
         range(len(player_positions)),
         key=lambda index: sum(_slot_accepts(slot, player_positions[index]) for slot in slots),
     )
-    for player_index in order:
-        assign(player_index, set())
-    return slot_to_player
+
+    def assign(slot_index: int, seen_players: set[int]) -> bool:
+        for player_index in players:
+            if player_index in seen_players or not _slot_accepts(slots[slot_index], player_positions[player_index]):
+                continue
+            seen_players.add(player_index)
+            previous_slot = player_to_slot.get(player_index)
+            if previous_slot is None or assign(previous_slot, seen_players):
+                player_to_slot[player_index] = slot_index
+                return True
+        return False
+
+    # Fill fixed starters before flex/bench, including through incumbent reassignment.
+    slot_order = sorted(range(len(slots)), key=lambda index: (
+        0 if _slot_positions(slots[index]) else
+        1 if slots[index] in {"UTIL", "UT"} else 2
+    ))
+    for slot_index in slot_order:
+        assign(slot_index, set())
+    return {slot_index: player_index for player_index, slot_index in player_to_slot.items()}
 
 
 def calculate_utility_score(
@@ -121,6 +133,39 @@ def calculate_utility_score(
         + 0.5 * replacement_value
         + value_scale * (0.10 * need + 0.05 * scarcity * need + 0.05 * construction)
     )
+
+
+def _roster_fit(
+    eligible: set[str],
+    drafted_positions: list[set[str]],
+    slots: list[str],
+    current_matching: dict[int, int],
+) -> tuple[float, float, int]:
+    open_slots = set(range(len(slots))) - set(current_matching)
+    compatible_count = sum(_slot_accepts(slots[index], eligible) for index in open_slots)
+    open_position_slots = [
+        index for index in open_slots if _slot_positions(slots[index])
+    ]
+    matching_after = _maximum_slot_matching([*drafted_positions, eligible], slots)
+    need = 100.0 * sum(
+        _slot_accepts(slots[index], eligible) or index in matching_after
+        for index in open_position_slots
+    ) / max(1, len(open_position_slots))
+    # Augmenting paths can put an incumbent, not the candidate, in the newly filled slot.
+    new_slots = [
+        slots[index] for index in matching_after if index not in current_matching
+    ]
+    if len(matching_after) <= len(current_matching) or not new_slots:
+        construction = 0.0
+    elif any(slot in CORE_POSITIONS for slot in new_slots):
+        construction = 100.0
+    elif any(slot in {"G", "F"} for slot in new_slots):
+        construction = 60.0
+    elif any(slot in {"UTIL", "UT"} for slot in new_slots):
+        construction = 30.0
+    else:
+        construction = 10.0
+    return need, construction, compatible_count
 
 
 def calculate_snake_draft_timing(
@@ -299,6 +344,8 @@ def _wait_decision_action(wait_cost: float | None) -> str:
 async def calculate_draft_utility(
     session: AsyncSession,
     request: DraftUtilityRequest,
+    *,
+    manager_drafted_player_ids: list[int] | None = None,
 ) -> DraftUtilityResult:
     drafted_ids = request.drafted_player_ids
     available_ids = request.available_player_ids
@@ -306,6 +353,9 @@ async def calculate_draft_utility(
         raise HTTPException(status_code=422, detail="Drafted and available player IDs must not contain duplicates")
     if set(drafted_ids) & set(available_ids):
         raise HTTPException(status_code=422, detail="A player cannot be both drafted and available")
+    roster_ids = drafted_ids if manager_drafted_player_ids is None else manager_drafted_player_ids
+    if len(set(roster_ids)) != len(roster_ids) or not set(roster_ids) <= set(drafted_ids):
+        raise HTTPException(status_code=422, detail="Manager roster must contain unique recorded drafted players")
     recent_pick_ids = request.recent_pick_player_ids
     if len(set(recent_pick_ids)) != len(recent_pick_ids):
         raise HTTPException(status_code=422, detail="Recent draft picks must not contain duplicate player IDs")
@@ -340,9 +390,20 @@ async def calculate_draft_utility(
         select(PlayerIdentity).where(PlayerIdentity.id.in_(identity_ids))
     )).all()) if identity_ids else []
     identities_by_id = {identity.id: identity for identity in identities}
+    status_times = dict((await session.execute(
+        select(LeaguePlayer.player_identity_id, func.max(LeaguePlayer.imported_at))
+        .where(
+            LeaguePlayer.player_identity_id.in_(available_ids),
+            ~LeaguePlayer.league_key.like("yahoo-mock-practice.%"),
+        ).group_by(LeaguePlayer.player_identity_id)
+    )).all()) if available_ids else {}
+    excluded_ids = {
+        identity.id for identity in identities
+        if recommendation_eligibility(identity.status) == "excluded"
+    }
     drafted_positions = [
         _positions(identities_by_id[player_id].position)
-        for player_id in drafted_ids
+        for player_id in roster_ids
         if player_id in identities_by_id
     ]
     slots = _expanded_slots(settings.roster_positions)
@@ -363,8 +424,6 @@ async def calculate_draft_utility(
             raise HTTPException(status_code=422, detail=str(error)) from error
     draft_runs, active_run_groups = detect_draft_runs(recent_pick_ids, identities_by_id)
     current_matching = _maximum_slot_matching(drafted_positions, slots)
-    open_slot_indexes = set(range(len(slots))) - set(current_matching)
-    remaining_slots = max(1, len(open_slot_indexes))
 
     metrics = list((await session.scalars(
         select(DraftPlayerMetric).where(
@@ -397,7 +456,7 @@ async def calculate_draft_utility(
         return current_time - updated_at > MARKET_STALE_AFTER
 
     market_inputs: dict[int, tuple[
-        float | None, int | None, float | None, str | None, str, bool
+        float | None, int | None, float | None, str | None, str, bool, datetime | None
     ]] = {}
     for player_id in available_ids:
         player_market_rows = market_rows_by_player.get(player_id, [])
@@ -429,6 +488,7 @@ async def calculate_draft_utility(
             "request" if request_adp is not None else (market_row.source if market_row else None),
             freshness,
             is_stale,
+            market_row.last_updated if request_adp is None and market_row is not None else None,
         )
     adp_missing = [player_id for player_id in available_ids if market_inputs[player_id][0] is None]
 
@@ -457,7 +517,7 @@ async def calculate_draft_utility(
     wait_cost_by_id: dict[int, tuple[float | None, float | None]] = {}
     for player_id in available_ids:
         metric = metrics_by_identity.get(player_id)
-        adp, draft_rank, draft_frequency, adp_source, data_freshness, is_stale = market_inputs[player_id]
+        adp, draft_rank, draft_frequency, adp_source, data_freshness, is_stale, market_data_as_of = market_inputs[player_id]
         market_value_delta, reach_score, fall_score = _market_timing_scores(
             adp,
             draft_timing.current_pick_number if draft_timing else None,
@@ -525,7 +585,9 @@ async def calculate_draft_utility(
             )
         if market_value_delta is not None and survival_probability is None:
             explanation = f"{market_explanation} {explanation}"
-        availability_by_id[player_id] = (survival_probability, availability_score)
+        availability_by_id[player_id] = (
+            (None, None) if player_id in excluded_ids else (survival_probability, availability_score)
+        )
         player_availability.append(DraftPlayerAvailability(
             player_identity_id=player_id,
             adp=adp,
@@ -541,6 +603,7 @@ async def calculate_draft_utility(
             miss_risk_score=miss_risk_score,
             survival_confidence=survival_confidence,
             data_freshness=data_freshness,
+            market_data_as_of=market_data_as_of,
             draft_now=draft_now,
             safe_to_wait=safe_to_wait,
             decision_action="insufficient_evidence",
@@ -553,33 +616,16 @@ async def calculate_draft_utility(
     best_key = None
     best_value_before_pick = None
     candidate_picks: dict[int, DraftUtilityPick] = {}
+    empty_roster_scores: dict[int, tuple[float, float, float]] = {}
     for player_id in available_ids:
         identity = identities_by_id.get(player_id)
         metric = metrics_by_identity.get(player_id)
         if identity is None or metric is None or not identity.nba_player_id:
             continue
         eligible = _positions(identity.position)
-        open_eligible_slots = [
-            index for index in open_slot_indexes
-            if _slot_accepts(slots[index], eligible)
-        ]
-        need_score = 100.0 * len(open_eligible_slots) / remaining_slots
-        matching_after = _maximum_slot_matching([*drafted_positions, eligible], slots)
-        new_player_slots = [
-            slots[index]
-            for index, assigned_player in matching_after.items()
-            if assigned_player == len(drafted_positions) and index not in current_matching
-        ]
-        if len(matching_after) <= len(current_matching) or not new_player_slots:
-            construction_score = 0.0
-        elif any(slot in CORE_POSITIONS for slot in new_player_slots):
-            construction_score = 100.0
-        elif any(slot in {"G", "F"} for slot in new_player_slots):
-            construction_score = 60.0
-        elif any(slot in {"UTIL", "UT"} for slot in new_player_slots):
-            construction_score = 30.0
-        else:
-            construction_score = 10.0
+        need_score, construction_score, compatible_count = _roster_fit(
+            eligible, drafted_positions, slots, current_matching,
+        )
         utility_score = calculate_utility_score(
             fantasy_value=metric.fantasy_value,
             replacement_value=metric.replacement_value,
@@ -592,7 +638,22 @@ async def calculate_draft_utility(
         )
         mode_adjustment = _mode_adjustment(metric, request.mode)
         run_bonus = _run_bonus(metric, eligible, draft_runs)
-        adp, draft_rank, draft_frequency, adp_source, data_freshness, _ = market_inputs[player_id]
+        empty_need, empty_construction, _ = _roster_fit(eligible, [], slots, {})
+        empty_roster_scores[player_id] = (
+            calculate_utility_score(
+                fantasy_value=metric.fantasy_value,
+                replacement_value=metric.replacement_value,
+                positional_scarcity=metric.positional_scarcity,
+                durability_score=metric.durability_score,
+                risk_score=metric.risk_score,
+                upside_score=metric.upside_score,
+                positional_need_score=empty_need,
+                roster_construction_score=empty_construction,
+            ) + mode_adjustment + run_bonus,
+            empty_need,
+            empty_construction,
+        )
+        adp, draft_rank, draft_frequency, adp_source, data_freshness, _, _ = market_inputs[player_id]
         survival_probability, availability_score = availability_by_id[player_id]
         survival_confidence = "heuristic_unvalidated" if survival_probability is not None else "unknown"
         draft_now = (
@@ -618,7 +679,7 @@ async def calculate_draft_utility(
             if run.active and run.position_group in _position_groups(eligible)
         ]
         reasons = [
-            f"Roster fit: {request.mode.title()} mode-adjusted utility is {mode_adjusted_utility_score:.2f}; position need is {need_score:.0f}/100 with {len(open_eligible_slots)} compatible open slots.",
+            f"Roster fit: {request.mode.title()} mode-adjusted utility is {mode_adjusted_utility_score:.2f}; position need is {need_score:.0f}/100 with {compatible_count} compatible open slots.",
             f"Scarcity impact: {metric.positional_scarcity:.0f}/100; replacement value is {metric.replacement_value:.2f}.",
             f"Roster construction impact: {construction_score:.0f}/100 for the best available slot fit.",
         ]
@@ -658,6 +719,11 @@ async def calculate_draft_utility(
             "Team-need impact: this score reflects your roster demand; opponent roster demand is unavailable unless indicated by recent positional runs."
         )
         pick = DraftUtilityPick(
+            yahoo_status=identity.status,
+            yahoo_status_label=YAHOO_STATUS_LABELS.get(identity.status),
+            recommendation_eligibility=recommendation_eligibility(identity.status),
+            yahoo_status_reason=yahoo_status_reason(identity.status),
+            yahoo_status_as_of=status_times.get(identity.id),
             player_identity_id=identity.id,
             yahoo_player_id=identity.yahoo_player_id,
             nba_player_id=identity.nba_player_id,
@@ -698,19 +764,27 @@ async def calculate_draft_utility(
             draft_now=draft_now,
             safe_to_wait=safe_to_wait,
             run_bonus=run_bonus,
-            reasons=reasons,
+            reasons=[*reasons, yahoo_status_reason(identity.status)],
         )
         candidate_picks[player_id] = pick
         tie_break = (mode_adjusted_utility_score, metric.fantasy_value, -identity.id)
-        if best_key is None or tie_break > best_key:
+        if player_id not in excluded_ids and (best_key is None or tie_break > best_key):
             best_key = tie_break
             best_pick = pick
 
     wait_cost_by_id = {}
     for player_id, pick in candidate_picks.items():
+        if player_id in excluded_ids:
+            candidate_picks[player_id] = pick.model_copy(update={
+                "draft_now": None, "safe_to_wait": None,
+                "next_pick_survival_probability": None, "miss_risk_score": None,
+                "survival_confidence": "unknown", "availability_score": None,
+                "reasons": [*pick.reasons, "Wait analysis unavailable: excluded by current Yahoo status."],
+            })
+            continue
         fallback_picks = sorted(
             (candidate for candidate_id, candidate in candidate_picks.items()
-             if candidate_id != player_id),
+             if candidate_id != player_id and candidate_id not in excluded_ids),
             key=lambda candidate: (candidate.wait_utility_now, -candidate.player_identity_id),
             reverse=True,
         )[:5]
@@ -778,7 +852,7 @@ async def calculate_draft_utility(
         best_pick = candidate_picks[best_pick.player_identity_id]
     ranked_wait_candidates = [
         pick for pick in candidate_picks.values()
-        if pick.expected_wait_cost is not None and pick.expected_wait_cost > 0
+        if pick.player_identity_id not in excluded_ids and pick.expected_wait_cost is not None and pick.expected_wait_cost > 0
     ]
     if ranked_wait_candidates:
         best_value_before_pick = max(
@@ -796,6 +870,11 @@ async def calculate_draft_utility(
 
     player_availability = [
         player.model_copy(update={
+            **({
+                "next_pick_survival_probability": None, "miss_risk_score": None,
+                "survival_confidence": "unknown", "availability_score": None,
+                "blocker": "Excluded by current Yahoo status",
+            } if player.player_identity_id in excluded_ids else {}),
             "expected_loss_if_gone": wait_cost_by_id.get(player.player_identity_id, (None, None))[0],
             "opportunity_cost_if_wait": wait_cost_by_id.get(player.player_identity_id, (None, None))[1],
             "draft_now": (
@@ -812,7 +891,7 @@ async def calculate_draft_utility(
             if player.player_identity_id in candidate_picks else "insufficient_evidence",
             "decision_confidence": candidate_picks[player.player_identity_id].decision_confidence
             if player.player_identity_id in candidate_picks else "unavailable",
-            "explanation": (
+            "explanation": yahoo_status_reason(identities_by_id[player.player_identity_id].status) if player.player_identity_id in excluded_ids else (
                 f"{player.explanation} Decision: {candidate_picks[player.player_identity_id].decision_action}; "
                 f"expected wait cost is {candidate_picks[player.player_identity_id].expected_wait_cost:+.2f}."
                 if player.player_identity_id in candidate_picks
@@ -827,7 +906,7 @@ async def calculate_draft_utility(
         best_pick = best_pick.model_copy(update={
             "reasons": [
                 *best_pick.reasons,
-                "Why selected: highest mode-adjusted team utility among the scored available players.",
+                "Why selected: highest mode-adjusted team utility among the scored, recommendation-eligible players.",
             ]
         })
     if best_value_before_pick is not None:
@@ -838,7 +917,43 @@ async def calculate_draft_utility(
             ]
         })
 
+    sorted_candidates = sorted(
+        candidate_picks.items(),
+        key=lambda item: (item[1].mode_adjusted_utility_score, item[1].fantasy_value, -item[0]),
+        reverse=True,
+    )
+    empty_roster_ranks = {
+        player_id: rank for rank, player_id in enumerate(sorted(
+            candidate_picks,
+            key=lambda player_id: (
+                empty_roster_scores[player_id][0],
+                candidate_picks[player_id].fantasy_value,
+                -player_id,
+            ),
+            reverse=True,
+        ), start=1)
+    }
+    roster_impacts: dict[int, DraftRosterImpact] = {}
+    for rank, (player_id, pick) in enumerate(sorted_candidates, start=1):
+        empty_score, empty_need, empty_construction = empty_roster_scores[player_id]
+        scale = max(abs(pick.fantasy_value), 1.0)
+        need_change = (pick.positional_need_score - empty_need) / 100.0
+        roster_impacts[player_id] = DraftRosterImpact(
+            rank_without_roster=empty_roster_ranks[player_id],
+            rank_with_roster=rank,
+            score_without_roster=empty_score,
+            score_change=pick.mode_adjusted_utility_score - empty_score,
+            need_without_roster=empty_need,
+            need_with_roster=pick.positional_need_score,
+            construction_without_roster=empty_construction,
+            construction_with_roster=pick.roster_construction_score,
+            need_score_change=scale * 0.10 * need_change,
+            scarcity_need_score_change=scale * 0.05 * pick.positional_scarcity / 100.0 * need_change,
+            construction_score_change=scale * 0.05 * (pick.roster_construction_score - empty_construction) / 100.0,
+        )
+
     return DraftUtilityResult(
+        roster_fit_version=ROSTER_FIT_VERSION,
         league_key=request.league_key,
         team_key=request.team_key,
         season=request.season,
@@ -850,8 +965,131 @@ async def calculate_draft_utility(
         draft_timing=draft_timing,
         draft_runs=draft_runs,
         player_availability=player_availability,
+        ranked_players=[
+            DraftBoardPlayer(
+                yahoo_status=pick.yahoo_status,
+                yahoo_status_label=pick.yahoo_status_label,
+                recommendation_eligibility=pick.recommendation_eligibility,
+                yahoo_status_reason=pick.yahoo_status_reason,
+                yahoo_status_as_of=pick.yahoo_status_as_of,
+                player_identity_id=player_id,
+                player_name=identities_by_id[player_id].player_name,
+                positions=sorted(_positions(identities_by_id[player_id].position)),
+                decision_action=pick.decision_action,
+                decision_score=pick.mode_adjusted_utility_score,
+                value_score=pick.fantasy_value,
+                roster_impact=roster_impacts[player_id],
+                adp=pick.adp,
+                adp_source=pick.adp_source,
+                market_data_as_of=market_inputs[player_id][6],
+                market_value_delta=pick.market_value_delta,
+                survival_probability=pick.next_pick_survival_probability,
+                miss_risk_score=pick.miss_risk_score,
+                survival_confidence=pick.survival_confidence,
+                data_freshness=pick.data_freshness,
+                expected_wait_cost=pick.expected_wait_cost,
+                data_quality={
+                    "decision": "heuristic" if pick.decision_confidence != "unavailable" else "insufficient_evidence",
+                    "value": "heuristic",
+                    "survival": (
+                        "heuristic" if pick.next_pick_survival_probability is not None
+                        else "stale" if pick.data_freshness == "stale"
+                        else "insufficient_evidence"
+                    ),
+                    "wait_cost": "heuristic" if pick.expected_wait_cost is not None else "insufficient_evidence",
+                },
+            )
+            for player_id, pick in sorted_candidates
+        ] + [
+            DraftBoardPlayer(
+                yahoo_status=identities_by_id[player_id].status,
+                yahoo_status_label=YAHOO_STATUS_LABELS.get(identities_by_id[player_id].status),
+                recommendation_eligibility=recommendation_eligibility(identities_by_id[player_id].status),
+                yahoo_status_reason=yahoo_status_reason(identities_by_id[player_id].status),
+                yahoo_status_as_of=status_times.get(player_id),
+                player_identity_id=player_id,
+                player_name=identities_by_id[player_id].player_name,
+                positions=sorted(_positions(identities_by_id[player_id].position)),
+                decision_action="insufficient_evidence",
+                decision_score=None,
+                value_score=None,
+                adp=market_inputs[player_id][0],
+                adp_source=market_inputs[player_id][3],
+                market_data_as_of=market_inputs[player_id][6],
+                market_value_delta=_market_timing_scores(
+                    market_inputs[player_id][0],
+                    draft_timing.current_pick_number if draft_timing else None,
+                    draft_timing.total_teams if draft_timing else None,
+                )[0],
+                survival_probability=availability_by_id[player_id][0],
+                miss_risk_score=(
+                    round(100.0 * (1.0 - availability_by_id[player_id][0]), 1)
+                    if availability_by_id[player_id][0] is not None else None
+                ),
+                survival_confidence=(
+                    "heuristic_unvalidated"
+                    if availability_by_id[player_id][0] is not None else "unknown"
+                ),
+                data_freshness=market_inputs[player_id][4],
+                expected_wait_cost=None,
+                data_quality={
+                    "decision": "insufficient_evidence",
+                    "value": "insufficient_evidence",
+                    "survival": (
+                        "stale" if market_inputs[player_id][4] == "stale"
+                        else "insufficient_evidence"
+                    ),
+                    "wait_cost": "insufficient_evidence",
+                },
+            )
+            for player_id in unscored
+        ],
         best_pick=best_pick,
         best_value_before_next_pick=best_value_before_pick,
         adp_missing_available_player_ids=adp_missing,
         unscored_available_player_ids=unscored,
+    )
+
+
+async def build_draft_roster(
+    session: AsyncSession,
+    league_key: str,
+    drafted_player_ids: list[int],
+) -> DraftRosterView:
+    settings = await session.get(LeagueSettings, league_key)
+    if settings is None:
+        raise HTTPException(status_code=404, detail="Imported league settings were not found")
+    identities = list((await session.scalars(
+        select(PlayerIdentity).where(PlayerIdentity.id.in_(drafted_player_ids))
+    )).all()) if drafted_player_ids else []
+    identities_by_id = {identity.id: identity for identity in identities}
+    ordered_identities = [
+        identities_by_id[player_id] for player_id in drafted_player_ids
+        if player_id in identities_by_id
+    ]
+    eligible_positions = [_positions(identity.position) for identity in ordered_identities]
+    slots = _expanded_slots(settings.roster_positions)
+    matching = _maximum_slot_matching(eligible_positions, slots)
+    assigned_slots = {player_index: slot_index for slot_index, player_index in matching.items()}
+    players = [
+        DraftRosterPlayer(
+            player_identity_id=identity.id,
+            player_name=identity.player_name,
+            positions=sorted(eligible_positions[index]),
+            roster_slot=slots[assigned_slots[index]] if index in assigned_slots else None,
+        )
+        for index, identity in enumerate(ordered_identities)
+    ]
+    player_by_slot = {
+        slot_index: players[player_index]
+        for slot_index, player_index in matching.items()
+    }
+    return DraftRosterView(
+        filled_count=len(matching),
+        open_count=max(0, len(slots) - len(matching)),
+        slots=[
+            DraftRosterSlot(position=position, player=player_by_slot.get(index))
+            for index, position in enumerate(slots)
+        ],
+        drafted_players=players,
     )

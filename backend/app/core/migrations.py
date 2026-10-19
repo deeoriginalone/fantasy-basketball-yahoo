@@ -9,6 +9,10 @@ MIGRATED_TABLES = {
     "draft_pick_events",
     "draft_recommendation_snapshots",
     "draft_targets",
+    "draft_mock_batches",
+    "draft_mock_runs",
+    "draft_sync_states",
+    "observer_connections",
 }
 MIGRATION_ADVISORY_LOCK = 20261010
 
@@ -86,15 +90,169 @@ MIGRATIONS: dict[str, tuple[str, ...]] = {
         """,
         "CREATE INDEX ix_draft_targets_session_status ON draft_targets (session_id, status)",
     ),
+    "0002_internal_mock_drafts": (
+        "ALTER TABLE draft_sessions ADD COLUMN draft_source VARCHAR(20) NOT NULL DEFAULT 'manual' CHECK (draft_source IN ('manual', 'internal_mock', 'yahoo_live'))",
+        """
+        CREATE TABLE draft_mock_batches (
+            id VARCHAR(36) PRIMARY KEY,
+            league_key VARCHAR(80) NOT NULL REFERENCES leagues(league_key) ON DELETE CASCADE,
+            manager_team_key VARCHAR(100) NOT NULL REFERENCES teams(team_key) ON DELETE CASCADE,
+            requested_runs INTEGER NOT NULL CHECK (requested_runs BETWEEN 1 AND 500),
+            aggressiveness DOUBLE PRECISION NOT NULL CHECK (aggressiveness BETWEEN 0 AND 1),
+            seed BIGINT NOT NULL,
+            session_config JSONB NOT NULL,
+            status VARCHAR(20) NOT NULL CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        "CREATE INDEX ix_draft_mock_batches_league ON draft_mock_batches (league_key, created_at)",
+        """
+        CREATE TABLE draft_mock_runs (
+            session_id VARCHAR(36) PRIMARY KEY REFERENCES draft_sessions(id) ON DELETE CASCADE,
+            batch_id VARCHAR(36) REFERENCES draft_mock_batches(id) ON DELETE CASCADE,
+            run_index INTEGER,
+            attempt_index INTEGER NOT NULL DEFAULT 0 CHECK (attempt_index >= 0),
+            restarted_from_session_id VARCHAR(36) REFERENCES draft_sessions(id) ON DELETE SET NULL,
+            seed BIGINT NOT NULL,
+            aggressiveness DOUBLE PRECISION NOT NULL CHECK (aggressiveness BETWEEN 0 AND 1),
+            status VARCHAR(20) NOT NULL CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed')),
+            evaluation JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        "CREATE INDEX ix_draft_mock_runs_batch ON draft_mock_runs (batch_id, run_index)",
+    ),
+    "0003_mock_lifecycle_and_practice": (
+        "ALTER TABLE draft_sessions ADD COLUMN archived_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_batches DROP CONSTRAINT draft_mock_batches_status_check",
+        "ALTER TABLE draft_mock_batches ADD CONSTRAINT draft_mock_batches_status_check CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed', 'canceled'))",
+        "ALTER TABLE draft_mock_batches ADD COLUMN archived_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_batches ADD COLUMN canceled_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_batches ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE draft_mock_batches ADD COLUMN worker_id VARCHAR(100)",
+        "ALTER TABLE draft_mock_batches ADD COLUMN lease_expires_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_batches ADD COLUMN heartbeat_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_batches ADD COLUMN queued_runs INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE draft_mock_batches ADD COLUMN running_runs INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE draft_mock_batches ADD COLUMN completed_runs INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE draft_mock_batches ADD COLUMN failed_runs INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE draft_mock_batches ADD COLUMN canceled_runs INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX ix_draft_mock_batches_worker_lease ON draft_mock_batches (status, lease_expires_at)",
+        "ALTER TABLE draft_mock_runs DROP CONSTRAINT draft_mock_runs_status_check",
+        "ALTER TABLE draft_mock_runs ADD CONSTRAINT draft_mock_runs_status_check CHECK (status IN ('queued', 'running', 'paused', 'awaiting_manager', 'completed', 'failed', 'canceled'))",
+        "ALTER TABLE draft_mock_runs ADD COLUMN archived_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_runs ADD COLUMN opponent_order_seed BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE draft_mock_runs ADD COLUMN pick_timer_seconds INTEGER",
+        "ALTER TABLE draft_mock_runs ADD COLUMN pick_timer_source VARCHAR(20) NOT NULL DEFAULT 'not_applicable' CHECK (pick_timer_source IN ('yahoo', 'practice', 'not_applicable'))",
+        "ALTER TABLE draft_mock_runs ADD COLUMN pick_deadline_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_runs ADD COLUMN next_pick_at TIMESTAMPTZ",
+        "ALTER TABLE draft_mock_runs ADD COLUMN practice_speed VARCHAR(30) NOT NULL DEFAULT 'realistic' CHECK (practice_speed IN ('realistic', 'fast', 'instant_until_my_turn'))",
+        "ALTER TABLE draft_mock_runs ADD COLUMN auto_pick_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE draft_mock_runs ADD COLUMN auto_pick_policy VARCHAR(40) NOT NULL DEFAULT 'recommended' CHECK (auto_pick_policy IN ('recommended', 'highest_decision_score', 'best_value', 'highest_priority_target'))",
+        "ALTER TABLE draft_mock_runs ADD COLUMN generated_team_slots JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "CREATE INDEX ix_draft_mock_runs_practice_scheduler ON draft_mock_runs (status, next_pick_at, pick_deadline_at) WHERE batch_id IS NULL",
+    ),
+    "0004_draft_sync_reconciliation": (
+        """
+        CREATE TABLE draft_sync_states (
+            session_id VARCHAR(36) PRIMARY KEY REFERENCES draft_sessions(id) ON DELETE CASCADE,
+            source_type VARCHAR(30) NOT NULL CHECK (source_type IN ('yahoo_draftresults', 'mock_yahoo_snapshot')),
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            paused BOOLEAN NOT NULL DEFAULT FALSE,
+            status VARCHAR(30) NOT NULL CHECK (status IN (
+                'synced', 'source_empty', 'source_unavailable', 'source_lagging',
+                'local_ahead', 'conflict', 'authentication_required', 'malformed_source',
+                'paused', 'completed'
+            )),
+            last_retrieved_at TIMESTAMPTZ,
+            last_successful_retrieval_at TIMESTAMPTZ,
+            source_confirmed_through INTEGER NOT NULL DEFAULT 0 CHECK (source_confirmed_through >= 0),
+            consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
+            conflict_overall_pick INTEGER,
+            conflict_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+            mock_mode VARCHAR(20) NOT NULL DEFAULT 'normal' CHECK (mock_mode IN ('normal', 'fast', 'step')),
+            mock_outage BOOLEAN NOT NULL DEFAULT FALSE,
+            mock_hold_delivery BOOLEAN NOT NULL DEFAULT FALSE,
+            mock_generated_picks JSONB NOT NULL DEFAULT '[]'::jsonb,
+            mock_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+            mock_snapshot_fault VARCHAR(30)
+        )
+        """,
+    ),
+    "0005_progressive_live_draft_order": (
+        "ALTER TABLE draft_sessions ALTER COLUMN draft_position DROP NOT NULL",
+        "ALTER TABLE draft_sessions ADD COLUMN draft_order_status VARCHAR(20) NOT NULL DEFAULT 'confirmed' CHECK (draft_order_status IN ('unresolved', 'partial', 'confirmed', 'conflict'))",
+        "ALTER TABLE draft_sessions ADD COLUMN draft_order_evidence JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "ALTER TABLE draft_picks ALTER COLUMN team_key DROP NOT NULL",
+    ),
+    "0006_observer_connections": (
+        """CREATE TABLE observer_connections (
+            id VARCHAR(64) PRIMARY KEY,
+            room_path VARCHAR(100) NOT NULL,
+            mode VARCHAR(20) NOT NULL CHECK (mode IN ('mock', 'live')),
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            session_id VARCHAR(36) REFERENCES draft_sessions(id) ON DELETE SET NULL,
+            status VARCHAR(30) NOT NULL DEFAULT 'CONNECTING',
+            details JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL
+        )""",
+        "CREATE UNIQUE INDEX uq_observer_active_connection ON observer_connections (active) WHERE active",
+    ),
 }
 
 DOWN_MIGRATIONS: dict[str, tuple[str, ...]] = {
+    "0006_observer_connections": ("DROP TABLE observer_connections",),
     "0001_draft_persistence": (
         "DROP TABLE draft_targets",
         "DROP TABLE draft_recommendation_snapshots",
         "DROP TABLE draft_pick_events",
         "DROP TABLE draft_picks",
         "DROP TABLE draft_sessions",
+    ),
+    "0002_internal_mock_drafts": (
+        "DROP TABLE draft_mock_runs",
+        "DROP TABLE draft_mock_batches",
+        "ALTER TABLE draft_sessions DROP COLUMN draft_source",
+    ),
+    "0003_mock_lifecycle_and_practice": (
+        "DROP INDEX ix_draft_mock_runs_practice_scheduler",
+        "ALTER TABLE draft_mock_runs DROP COLUMN opponent_order_seed",
+        "ALTER TABLE draft_mock_runs DROP COLUMN generated_team_slots",
+        "ALTER TABLE draft_mock_runs DROP COLUMN auto_pick_policy",
+        "ALTER TABLE draft_mock_runs DROP COLUMN auto_pick_enabled",
+        "ALTER TABLE draft_mock_runs DROP COLUMN practice_speed",
+        "ALTER TABLE draft_mock_runs DROP COLUMN next_pick_at",
+        "ALTER TABLE draft_mock_runs DROP COLUMN pick_deadline_at",
+        "ALTER TABLE draft_mock_runs DROP COLUMN pick_timer_source",
+        "ALTER TABLE draft_mock_runs DROP COLUMN pick_timer_seconds",
+        "ALTER TABLE draft_mock_runs DROP COLUMN archived_at",
+        "ALTER TABLE draft_mock_runs DROP CONSTRAINT draft_mock_runs_status_check",
+        "ALTER TABLE draft_mock_runs ADD CONSTRAINT draft_mock_runs_status_check CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed', 'canceled'))",
+        "DROP INDEX ix_draft_mock_batches_worker_lease",
+        "ALTER TABLE draft_mock_batches DROP COLUMN canceled_runs",
+        "ALTER TABLE draft_mock_batches DROP COLUMN failed_runs",
+        "ALTER TABLE draft_mock_batches DROP COLUMN completed_runs",
+        "ALTER TABLE draft_mock_batches DROP COLUMN running_runs",
+        "ALTER TABLE draft_mock_batches DROP COLUMN queued_runs",
+        "ALTER TABLE draft_mock_batches DROP COLUMN heartbeat_at",
+        "ALTER TABLE draft_mock_batches DROP COLUMN lease_expires_at",
+        "ALTER TABLE draft_mock_batches DROP COLUMN worker_id",
+        "ALTER TABLE draft_mock_batches DROP COLUMN cancel_requested",
+        "ALTER TABLE draft_mock_batches DROP COLUMN canceled_at",
+        "ALTER TABLE draft_mock_batches DROP COLUMN archived_at",
+        "ALTER TABLE draft_mock_batches DROP CONSTRAINT draft_mock_batches_status_check",
+        "ALTER TABLE draft_mock_batches ADD CONSTRAINT draft_mock_batches_status_check CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed'))",
+        "ALTER TABLE draft_sessions DROP COLUMN archived_at",
+    ),
+    "0004_draft_sync_reconciliation": (
+        "DROP TABLE draft_sync_states",
+    ),
+    "0005_progressive_live_draft_order": (
+        "ALTER TABLE draft_picks ALTER COLUMN team_key SET NOT NULL",
+        "ALTER TABLE draft_sessions DROP COLUMN draft_order_evidence",
+        "ALTER TABLE draft_sessions DROP COLUMN draft_order_status",
+        "ALTER TABLE draft_sessions ALTER COLUMN draft_position SET NOT NULL",
     ),
 }
 

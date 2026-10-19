@@ -140,10 +140,12 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
             "league_key",
             "league_name",
             "season",
+            "draft_pick_time_seconds",
             "scoring_settings",
             "roster_positions",
             "teams",
         }
+        assert league_response.json()["draft_pick_time_seconds"] is None
         assert league_response.json()["scoring_settings"] == {
             "scoring_type": "head",
             "categories": [{"stat_id": "77", "name": "Fixture Stat", "value": 2.5}],

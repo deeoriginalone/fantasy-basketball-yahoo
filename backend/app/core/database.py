@@ -32,6 +32,11 @@ async def initialize_schema() -> None:
         DraftMarketProviderSnapshot,
         DraftMarketSyncRun,
         DraftMarketUnmatchedRecord,
+        DraftSyncState,
+        DraftMockBatch,
+        DraftMockRun,
+        DraftMockBatch,
+        DraftMockRun,
         DraftPlayerMetric,
     )
     from app.features.leagues.models import League, LeagueSettings, Team
@@ -57,6 +62,7 @@ async def initialize_schema() -> None:
         DraftMarketProviderSnapshot,
         DraftMarketSyncRun,
         DraftMarketUnmatchedRecord,
+        DraftSyncState,
         League,
         LeagueSettings,
         Team,
