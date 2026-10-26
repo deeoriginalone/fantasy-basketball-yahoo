@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,14 @@ class Settings(BaseSettings):
     yahoo_redirect_uri: str = "http://localhost:8000/api/v1/yahoo/oauth/callback"
     oauth_state_secret: str = ""
     token_encryption_key: str = ""
+    waiver_manager_team_key: str = Field(default="478.l.50505.t.9", min_length=1)
+    waiver_weights: dict[str, float] = {
+        "roster_fit": 0.35,
+        "player_value": 0.25,
+        "opportunity": 0.15,
+        "schedule": 0.15,
+        "acquisition_value": 0.10,
+    }
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

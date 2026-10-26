@@ -29,6 +29,8 @@ def _response(league) -> LeagueResponse:
         league_key=league.league_key,
         league_name=league.league_name,
         season=league.season,
+        league_imported_at=league.imported_at,
+        settings_imported_at=settings.imported_at if settings else None,
         draft_pick_time_seconds=(
             normalize_yahoo_draft_pick_time(league.league_key, settings.source_payload)
             if settings else None

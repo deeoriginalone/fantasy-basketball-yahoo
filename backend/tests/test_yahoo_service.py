@@ -2,6 +2,8 @@ import asyncio
 import logging
 
 import httpx
+import pytest
+from fastapi import HTTPException
 
 from app.services.yahoo.client import YahooFantasyClient
 from app.services.yahoo.game_keys import discover_active_nba_game_key
@@ -145,3 +147,27 @@ def test_yahoo_client_retries_transient_responses_without_logging_tokens(caplog)
     assert attempts == 3
     assert any(record.event == "yahoo_request_retry" for record in caplog.records)
     assert access_token not in caplog.text
+
+
+def test_yahoo_client_stops_on_401_without_retry_or_disclosing_provider_response(caplog) -> None:
+    attempts = 0
+
+    async def reject(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(401, json={"error": "synthetic-private-provider-detail"})
+
+    client = YahooFantasyClient(
+        transport=httpx.MockTransport(reject),
+        max_attempts=3,
+        base_retry_delay=0.001,
+    )
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(client.get_json("league/nba.l.1/teams", "synthetic-access"))
+
+    assert error.value.status_code == 401
+    assert attempts == 1
+    assert "synthetic-private-provider-detail" not in str(error.value.detail)
+    assert "synthetic-private-provider-detail" not in caplog.text
+    assert "synthetic-access" not in caplog.text

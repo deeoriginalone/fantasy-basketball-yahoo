@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
@@ -9,6 +10,7 @@ from app.core.config import Settings
 from app.core.security import decrypt_token, encrypt_token
 from app.features.yahoo.models import YahooCredential
 from app.features.yahoo.oauth import YahooOAuth
+from app.services.yahoo.auth import YahooAuthService
 
 
 class FakeSession:
@@ -118,3 +120,66 @@ def test_initial_authorization_requires_refresh_token() -> None:
         )
 
     assert error.value.status_code == 502
+
+
+def test_unexpired_normal_auth_uses_the_same_stored_access_token_without_refresh(monkeypatch) -> None:
+    key = Fernet.generate_key().decode("ascii")
+    credential = YahooCredential(
+        id=1,
+        access_token_encrypted=encrypt_token("synthetic-access", key),
+        refresh_token_encrypted=encrypt_token("synthetic-refresh", key),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    session = FakeSession(credential)
+
+    def forbidden_http(*args, **kwargs):
+        pytest.fail("Unexpired acquisition must not refresh")
+
+    monkeypatch.setattr("app.features.yahoo.oauth.httpx.AsyncClient", forbidden_http)
+    result = asyncio.run(YahooAuthService(_settings(key)).access_token(session))
+
+    assert result == decrypt_token(credential.access_token_encrypted, key)
+    assert session.commits == 0
+
+
+def test_rejected_refresh_attempts_once_and_preserves_encrypted_credentials(monkeypatch, caplog) -> None:
+    key = Fernet.generate_key().decode("ascii")
+    credential = YahooCredential(
+        id=1,
+        access_token_encrypted=encrypt_token("synthetic-access", key),
+        refresh_token_encrypted=encrypt_token("synthetic-refresh", key),
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    before = (
+        credential.access_token_encrypted,
+        credential.refresh_token_encrypted,
+        credential.expires_at,
+    )
+    session = FakeSession(credential)
+    requests = []
+
+    async def reject(request):
+        requests.append((request.method, request.url.path))
+        return httpx.Response(400, json={"error": "synthetic-private-provider-error"})
+
+    original_client = httpx.AsyncClient
+
+    def fixture_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(reject), **kwargs)
+
+    monkeypatch.setattr("app.features.yahoo.oauth.httpx.AsyncClient", fixture_client)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(YahooAuthService(_settings(key)).access_token(session))
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Yahoo token refresh failed; reconnect the account"
+    assert requests == [("POST", "/oauth2/get_token")]
+    assert session.commits == 0
+    assert (
+        credential.access_token_encrypted,
+        credential.refresh_token_encrypted,
+        credential.expires_at,
+    ) == before
+    assert "synthetic-access" not in caplog.text
+    assert "synthetic-refresh" not in caplog.text
+    assert "synthetic-private-provider-error" not in caplog.text

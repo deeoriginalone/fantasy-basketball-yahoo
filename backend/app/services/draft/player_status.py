@@ -8,6 +8,7 @@ YAHOO_STATUS_LABELS = {
     "Q": "Questionable",
 }
 UNAVAILABLE_YAHOO_STATUSES = frozenset({"O", "NA"})
+SUPPORTED_YAHOO_STATUSES = frozenset({"O", "NA", "P", "Q"})
 
 
 def recommendation_eligibility(status: str | None) -> Literal["excluded", "uncertain", "unknown"]:
@@ -16,6 +17,10 @@ def recommendation_eligibility(status: str | None) -> Literal["excluded", "uncer
     if status in {"P", "Q"}:
         return "uncertain"
     return "unknown"
+
+
+def status_is_supported(status: str | None) -> bool:
+    return status in SUPPORTED_YAHOO_STATUSES
 
 
 def yahoo_status_reason(status: str | None) -> str:

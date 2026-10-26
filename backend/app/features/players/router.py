@@ -12,8 +12,9 @@ from app.features.players.contracts import (
 from app.features.players.service import (
     get_player_identity,
     import_yahoo_players,
-    list_persisted_rosters,
+    list_roster_baselines,
     list_player_identities,
+    roster_data_status,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["Players"])
@@ -53,12 +54,15 @@ async def get_rosters(
     league_key: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> list[FantasyRosterResponse]:
-    rosters = await list_persisted_rosters(session)
+    rosters = await list_roster_baselines(session, league_key)
     return [
         FantasyRosterResponse(
             league_key=team.league_key,
             team_key=team.team_key,
             team_name=team.team_name,
+            roster_data_status=roster_data_status(team, roster),
+            roster_source="yahoo" if roster else None,
+            roster_as_of=roster.imported_at if roster else None,
             players=[
                 RosterPlayerResponse(
                     id=entry.identity.id,
@@ -69,9 +73,8 @@ async def get_rosters(
                     status=entry.identity.status,
                     roster_position=entry.roster_position,
                 )
-                for entry in team.roster_entries
+                for entry in (roster.roster_entries if roster else [])
             ],
         )
-        for team in rosters
-        if league_key is None or team.league_key == league_key
+        for team, roster in rosters
     ]

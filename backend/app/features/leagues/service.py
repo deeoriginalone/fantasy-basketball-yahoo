@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,22 +64,26 @@ async def import_manager_leagues(
                     set_={key: value for key, value in settings_values.items() if key != "league_key"},
                 )
                 await session.execute(settings_statement)
-                await session.execute(
-                    delete(Team).where(Team.league_key == normalized.league_key)
-                )
                 if normalized.teams:
+                    team_statement = insert(Team).values(
+                        [
+                            {
+                                "team_key": team.team_key,
+                                "league_key": normalized.league_key,
+                                "team_name": team.team_name,
+                                "source_payload": team.source_payload,
+                                "imported_at": imported_at,
+                            }
+                            for team in normalized.teams
+                        ]
+                    )
                     await session.execute(
-                        insert(Team).values(
-                            [
-                                {
-                                    "team_key": team.team_key,
-                                    "league_key": normalized.league_key,
-                                    "team_name": team.team_name,
-                                    "source_payload": team.source_payload,
-                                    "imported_at": imported_at,
-                                }
-                                for team in normalized.teams
-                            ]
+                        team_statement.on_conflict_do_update(
+                            index_elements=[Team.team_key],
+                            set_={
+                                key: getattr(team_statement.excluded, key)
+                                for key in ("league_key", "team_name", "source_payload", "imported_at")
+                            },
                         )
                     )
                 imported_team_count += len(normalized.teams)
@@ -92,9 +96,13 @@ async def import_manager_leagues(
                     )
                 )
     except SQLAlchemyError as error:
-        logger.exception(
+        logger.error(
             "Unable to persist Yahoo league import",
-            extra={"event": "yahoo_import_persistence_failed", "game_key": game_key},
+            extra={
+                "event": "yahoo_import_persistence_failed",
+                "game_key": game_key,
+                "error_type": type(error).__name__,
+            },
         )
         raise HTTPException(status_code=502, detail="Yahoo league data could not be persisted") from error
 

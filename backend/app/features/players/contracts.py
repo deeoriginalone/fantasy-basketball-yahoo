@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -32,6 +33,9 @@ class FantasyRosterResponse(BaseModel):
     league_key: str
     team_key: str
     team_name: str | None
+    roster_data_status: Literal["available", "stale", "not_imported"]
+    roster_source: Literal["yahoo"] | None
+    roster_as_of: datetime | None
     players: list[RosterPlayerResponse]
 
 

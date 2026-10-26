@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from datetime import datetime, timezone
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
@@ -281,11 +281,39 @@ async def get_player_identity(session: AsyncSession, internal_id: int) -> Player
     return await session.get(PlayerIdentity, internal_id)
 
 
-async def list_persisted_rosters(session: AsyncSession) -> list[FantasyTeam]:
+async def list_roster_baselines(
+    session: AsyncSession,
+    league_key: str | None = None,
+) -> list[tuple[Team, FantasyTeam | None]]:
     statement = (
-        select(FantasyTeam)
+        select(Team, FantasyTeam)
+        .outerjoin(
+            FantasyTeam,
+            (FantasyTeam.team_key == Team.team_key)
+            & (FantasyTeam.league_key == Team.league_key),
+        )
         .options(selectinload(FantasyTeam.roster_entries).selectinload(RosterEntry.identity))
-        .order_by(FantasyTeam.league_key, FantasyTeam.team_key)
+        .options(selectinload(Team.league).selectinload(League.settings))
+        .order_by(Team.league_key, Team.team_key)
     )
-    result = await session.scalars(statement)
+    if league_key:
+        statement = statement.where(Team.league_key == league_key)
+    result = await session.execute(statement)
     return list(result.all())
+
+
+def roster_data_status(
+    team: Team,
+    roster: FantasyTeam | None,
+) -> Literal["available", "stale", "not_imported"]:
+    if roster is None:
+        return "not_imported"
+    league_state_timestamps = [
+        team.imported_at,
+        team.league.imported_at,
+    ]
+    if team.league.settings is not None:
+        league_state_timestamps.append(team.league.settings.imported_at)
+    if roster.imported_at < max(league_state_timestamps):
+        return "stale"
+    return "available"

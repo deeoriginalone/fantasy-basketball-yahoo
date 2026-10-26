@@ -11,8 +11,108 @@ export interface League {
   league_key: string;
   league_name: string;
   season: number | null;
-  roster_positions: Array<{ position: string; count: number; is_starting_position?: number }>;
+  league_imported_at: string;
+  settings_imported_at: string | null;
+  scoring_settings: {
+    scoring_type?: string;
+    categories?: Array<{ stat_id: string; name: string | null; value: number | string }>;
+  };
+  roster_positions: Array<{ position: string; count: number | string; is_starting_position?: number }>;
   teams: LeagueTeam[];
+}
+
+export interface YahooRosterBaseline {
+  league_key: string;
+  team_key: string;
+  team_name: string | null;
+  roster_data_status: "available" | "stale" | "not_imported";
+  roster_source: "yahoo" | null;
+  roster_as_of: string | null;
+  players: Array<{
+    id: number;
+    yahoo_player_id: string;
+    player_name: string;
+    team: string | null;
+    position: string | null;
+    status: string | null;
+    roster_position: string | null;
+  }>;
+}
+
+export interface TeamCategoryBaseline {
+  league_key: string;
+  league_season: number | null;
+  settings_imported_at: string | null;
+  selected_source_season: string | null;
+  selected_source_stat_type: string | null;
+  source_season_selection: "latest_eligible_season_with_rostered_player_stats";
+  identity_method: {
+    calculation_version: string;
+    minimum_comparable_teams: number;
+    strength_threshold: number;
+    weakness_threshold: number;
+  };
+  teams: Array<{
+    league_key: string;
+    team_key: string;
+    team_name: string | null;
+    roster_data_status: "available" | "stale" | "not_imported";
+    roster_as_of: string | null;
+    roster_player_count: number | null;
+    mapped_player_count: number | null;
+    unmapped_player_count: number | null;
+    categories: Array<{
+      category_id: string;
+      category_name: string | null;
+      configured_value: number | string | null;
+      status: "available" | "partial" | "unavailable" | "unsupported";
+      reason: string | null;
+      calculation_type: string | null;
+      direction: "higher_is_better" | "lower_is_better" | null;
+      raw_value: number | null;
+      numerator_total: number | null;
+      denominator_total: number | null;
+      contributing_player_count: number;
+      missing_or_unmapped_player_count: number;
+      missing_denominator_player_count: number;
+      missing_players: Array<{
+        yahoo_player_id: string;
+        player_name: string;
+        reason: string;
+      }>;
+      source_table: string | null;
+      source_imports: Array<{
+        season: string;
+        stat_type: string;
+        imported_at: string;
+        player_count_with_source_stats: number;
+        contributing_player_count: number;
+      }>;
+      league_relative: {
+        calculation_version: string;
+        minimum_comparable_teams: number;
+        strength_threshold: number;
+        weakness_threshold: number;
+        comparison_status: "sufficient" | "insufficient";
+        comparable_team_count: number;
+        rank: number | null;
+        minimum: number | null;
+        maximum: number | null;
+        median: number | null;
+        normalized_position: number | null;
+        direction: "higher_is_better" | "lower_is_better" | null;
+        label: "strength" | "neutral" | "weakness" | "insufficient_evidence";
+        coverage_status: "available" | "partial" | "stale" | "unavailable" | "unsupported";
+        excluded_teams: Array<{
+          team_key: string;
+          team_name: string | null;
+          coverage_status: "available" | "partial" | "stale" | "unavailable" | "unsupported";
+          reasons: string[];
+        }>;
+        category_meaning: string | null;
+      } | null;
+    }>;
+  }>;
 }
 
 export interface DraftPick {

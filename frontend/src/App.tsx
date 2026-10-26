@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "./api";
+import { ChampionshipBaseline } from "./ChampionshipBaseline";
+import { WaiverCenter } from "./WaiverCenter";
 import { YahooConnect } from "./YahooConnect";
 import { createRoomPoller } from "./roomPolling.js";
 import type { RoomPoller } from "./roomPolling.js";
@@ -72,7 +74,7 @@ function BrandBar({ right }: { right?: React.ReactNode }) {
         <span className="brand-mark"><Activity size={19} strokeWidth={2.5} /></span>
         <span className="brand-name">COURT<span>IQ</span></span>
       </Link>
-      <div className="brandbar-right">{right}</div>
+      <div className="brandbar-right"><Link className="top-link" to="/waivers">Waiver Center</Link>{right}</div>
     </header>
   );
 }
@@ -370,17 +372,19 @@ function SetupPage() {
 
   return (
     <div className="app-shell">
-      <BrandBar right={<span className="top-label"><span className="status-dot" /> DRAFT DESK</span>} />
+      <BrandBar right={<span className="top-label"><span className="status-dot" /> CHAMPIONSHIP HQ</span>} />
       <main className="setup-page">
         <div className="page-intro">
           <div>
-            <p className="eyebrow">DRAFT DESK</p>
-            <h1>READY FOR YAHOO</h1>
+            <p className="eyebrow">CHAMPIONSHIP HQ</p>
+            <h1>BUILD YOUR CHAMPIONSHIP BASELINE</h1>
+            <p>Start with saved Yahoo league settings and rosters. Draft tools remain available in Advanced.</p>
           </div>
         </div>
 
         {error && <ErrorLine>{error}</ErrorLine>}
         {message && <div className="notice notice-success" role="status"><Check size={17} />{message}</div>}
+        <ChampionshipBaseline leagues={leagues} />
         <YahooConnect />
         <p className="internal-practice-link">Practice without Yahoo{" · "}
           <button className="text-button" type="button" onClick={() => {
@@ -1585,5 +1589,5 @@ function QualityLine({ label, value, status }: { label: string; value: string; s
 }
 
 export default function App() {
-  return <Routes><Route path="/" element={<SetupPage />} /><Route path="/draft/:sessionId" element={<DraftRoomPage />} /><Route path="*" element={<SetupPage />} /></Routes>;
+  return <Routes><Route path="/" element={<SetupPage />} /><Route path="/waivers" element={<WaiverCenter />} /><Route path="/draft/:sessionId" element={<DraftRoomPage />} /><Route path="*" element={<SetupPage />} /></Routes>;
 }

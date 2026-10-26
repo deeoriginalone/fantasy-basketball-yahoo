@@ -342,6 +342,62 @@ h1, h2, p { margin-top: 0; }
 .quality-heuristic { color: #a06546; }
 .quality-available { color: #387853; }
 .quality-stale { color: #a34d3e; }
+
+.championship-baseline { margin: 22px 0; padding: 20px; }
+.championship-baseline-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.championship-baseline-heading h2 { margin: 0 0 6px; font-size: 21px; }
+.championship-baseline-heading p:not(.eyebrow), .championship-baseline-summary p,
+.championship-baseline-settings p, .championship-roster > p, .championship-baseline-limit {
+  color: #65736c; font-size: 11px; line-height: 1.5;
+}
+.championship-baseline-controls { display: flex; align-items: flex-end; gap: 10px; }
+.championship-baseline-summary { margin: 18px 0; padding: 12px 14px; background: #f5f7f3; }
+.championship-baseline-summary > div { display: flex; justify-content: space-between; gap: 12px; }
+.championship-baseline-summary > div span { color: #65736c; font-size: 11px; }
+.championship-baseline-summary p { display: inline-block; margin: 8px 18px 0 0; }
+.championship-baseline-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.championship-baseline-settings h3, .championship-roster-list h3 { margin: 0 0 7px; font-size: 13px; }
+.championship-baseline-settings ul, .championship-roster ul { display: flex; flex-wrap: wrap; gap: 5px 16px; margin: 10px 0; padding-left: 18px; color: #405149; font-size: 11px; }
+.championship-roster-list { margin-top: 20px; }
+.championship-roster { border-top: 1px solid var(--line); padding: 10px 2px; }
+.championship-roster summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; font-size: 12px; font-weight: 650; }
+.championship-roster summary span + span { color: #65736c; font-size: 10px; font-weight: 500; text-transform: capitalize; }
+.championship-baseline-limit { margin: 14px 0 0; }
+.team-category-baseline { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.team-category-baseline h3 { margin: 0 0 5px; font-size: 13px; }
+.team-category-baseline-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; }
+.team-identity-select { min-width: min(280px, 100%); }
+.team-category-limit, .team-category-method, .team-category-source {
+  margin: 8px 0; color: #65736c; font-size: 10px; line-height: 1.45;
+}
+.team-category-limit { color: #53645b; }
+.team-category-method { font-family: var(--mono); font-size: 9px; }
+.team-identity-content { margin-top: 12px; }
+.team-category-baseline-heading p, .team-category-source, .team-category-team-heading span,
+.team-category-row > p { margin: 5px 0; color: #65736c; font-size: 10px; line-height: 1.45; }
+.team-category-team { margin-top: 12px; padding: 12px; background: #f7f8f5; }
+.team-category-team-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.team-category-team-heading strong { font-size: 12px; }
+.team-category-team-heading span { text-align: right; }
+.team-category-row { display: grid; grid-template-columns: minmax(100px, 1fr) auto; gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.team-category-value { display: flex; justify-content: space-between; gap: 12px; grid-column: 1 / -1; font-size: 11px; }
+.team-category-value span { font-variant-numeric: tabular-nums; font-weight: 650; }
+.team-category-row > p { grid-column: 1 / -1; }
+.team-category-exclusions, .team-category-raw { grid-column: 1 / -1; color: #52625a; font-size: 10px; }
+.team-category-exclusions summary, .team-category-raw summary { width: fit-content; cursor: pointer; font-weight: 650; }
+.team-category-exclusions ul, .team-category-raw ul { margin: 5px 0; padding-left: 16px; line-height: 1.5; }
+.team-category-raw p { margin: 5px 0; color: #65736c; font-size: 10px; line-height: 1.45; }
+.team-category-missing { grid-column: 1 / -1; margin: 3px 0; padding-left: 16px; color: #8e5148; font-size: 10px; }
+
+@media (max-width: 680px) {
+  .championship-baseline { padding: 15px; }
+  .championship-baseline-heading, .championship-baseline-controls { flex-direction: column; align-items: stretch; }
+  .championship-baseline-settings { grid-template-columns: 1fr; }
+  .championship-baseline-summary > div, .championship-roster summary { flex-direction: column; gap: 4px; }
+  .team-category-team-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .team-category-team-heading span { text-align: left; }
+  .team-category-baseline-heading { align-items: stretch; flex-direction: column; }
+}
 .quality-insufficient_evidence, .quality-unknown { color: #87918b; }
 .warning-copy { margin: 9px 16px 0; color: #8a7047; font-size: 9px; line-height: 1.5; }
 .conflict-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #edc1b6; border-radius: 5px; color: #8e4037; background: #fff4f0; }
@@ -482,3 +538,76 @@ h1, h2, p { margin-top: 0; }
 .yahoo-player-status { display: grid; gap: .2rem; margin: .6rem 0; font-size: .7rem; line-height: 1.4; }
 .yahoo-player-status.status-excluded { border-left: 3px solid var(--coral); padding-left: .5rem; }
 .yahoo-player-status.status-uncertain { border-left: 3px solid var(--blue); padding-left: .5rem; }
+.waiver-center { max-width: 1440px; margin: 0 auto; padding: 24px; min-width: 0; }
+.waiver-heading, .waiver-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; justify-content: space-between; }
+.waiver-controls { justify-content: flex-start; margin: 24px 0; }
+.waiver-controls .field { min-width: 220px; }
+.waiver-controls select { width: 100%; padding: 10px; }
+.waiver-controls fieldset { display: flex; gap: 20px; padding: 12px; border: 1px solid var(--line, #445064); border-radius: 8px; }
+.waiver-controls input { margin-right: 8px; }
+.waiver-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; margin: 16px 0; }
+.waiver-filter { display: grid; gap: 5px; min-width: 0; font-weight: 600; }
+.waiver-filter input, .waiver-filter select { width: 100%; min-width: 0; padding: 10px; }
+.waiver-checkbox { display: flex; align-items: center; gap: 8px; }
+.waiver-panel > details > summary, .waiver-panel > summary { cursor: pointer; font-weight: 700; }
+.waiver-panel { padding: 24px; margin-bottom: 20px; min-width: 0; }
+.waiver-panel h2 { margin-top: 0; }
+.waiver-panel p, .waiver-dialog p, .waiver-evidence dd { line-height: 1.6; }
+.waiver-table-scroll { max-width: 100%; overflow-x: auto; }
+.waiver-table { width: 100%; min-width: 1060px; border-collapse: collapse; text-align: left; }
+.waiver-table caption { text-align: left; padding: 12px 0; }
+.waiver-table th, .waiver-table td { padding: 12px 10px; border-bottom: 1px solid var(--line, #445064); vertical-align: top; }
+.waiver-table small { display: block; margin-top: 6px; font-weight: 400; }
+.waiver-player { color: inherit; background: transparent; border: 0; padding: 0; text-align: left; text-decoration: underline; cursor: pointer; font: inherit; }
+.waiver-quality, .waiver-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.waiver-quality dt { text-transform: capitalize; }
+.waiver-quality dd, .waiver-comparison dd { margin: 6px 0 0; overflow-wrap: anywhere; }
+.waiver-evidence { padding: 12px; border-left: 3px solid #8c9baa; }
+.waiver-evidence.is-stale, .waiver-evidence.is-unknown, .waiver-evidence.is-partial { border-color: #e8b34c; }
+.waiver-evidence.is-missing, .waiver-evidence.is-unsupported { border-color: #dc8989; }
+.waiver-roster-picker { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.waiver-roster-picker legend { margin-bottom: 10px; font-weight: 700; }
+.waiver-roster-card { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(12rem, .8fr); align-items: center; gap: 14px; padding: 14px; border: 1px solid var(--line, #445064); border-radius: 8px; cursor: pointer; }
+.waiver-roster-card.is-selected { border-color: var(--forest, #377d65); box-shadow: inset 0 0 0 1px var(--forest, #377d65); }
+.waiver-roster-card input { width: 1.1rem; height: 1.1rem; }
+.waiver-roster-main, .waiver-roster-evidence { display: grid; gap: 4px; }
+.waiver-roster-main span, .waiver-roster-evidence { font-size: .9rem; }
+.waiver-replacement-list { display: grid; gap: 16px; }
+.waiver-replacement-card { padding: 18px; border: 1px solid var(--line, #445064); border-radius: 8px; }
+.waiver-replacement-card > header { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 8px; }
+.waiver-replacement-card h3 { margin: 0 0 8px; }
+.waiver-replacement-card h4 { margin-bottom: 6px; }
+.waiver-kicker { margin: 0 0 5px; font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.waiver-decision { border: 1px solid var(--line, #445064); border-radius: 999px; padding: 5px 10px; font-size: .8rem; text-transform: capitalize; }
+.waiver-decision.is-review_replacement { border-color: var(--forest, #377d65); }
+.waiver-decision.is-unavailable { border-color: #dc8989; }
+.waiver-samples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.waiver-samples > div { display: grid; justify-items: start; align-content: start; gap: 5px; padding: 10px; border-left: 3px solid var(--forest, #377d65); }
+.waiver-samples > p { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.waiver-samples small { display: block; }
+.waiver-sample { display: inline-block; border-radius: 4px; padding: 3px 6px; font-size: .74rem; font-weight: 800; letter-spacing: .03em; }
+.waiver-sample-no-current-season-evidence, .waiver-sample-insufficient-for-strong-recommendation, .waiver-sample-very-limited { color: #5e2800; background: #ffe1b4; }
+.waiver-sample-limited { color: #4d4000; background: #fff1ae; }
+.waiver-sample-good, .waiver-sample-excellent { color: #174b38; background: #d8f1e4; }
+.waiver-measured-label { font-weight: 700; }
+.waiver-outcome { padding: 10px 12px; border-left: 3px solid var(--forest, #377d65); }
+.waiver-outcome.is-no-improvement { border-color: #dc8989; }
+.waiver-component-list { columns: 2; }
+.waiver-window-note { font-size: .9rem; }
+.waiver-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); overflow-y: auto; }
+.waiver-dialog::backdrop { background: #000a; }
+.waiver-close { position: sticky; top: 0; z-index: 1; }
+.waiver-center :focus-visible, .waiver-dialog :focus-visible { outline: 3px solid var(--forest); outline-offset: 3px; }
+@media (max-width: 640px) {
+  .waiver-center { padding: 12px; }
+  .waiver-panel, .waiver-dialog { padding: 16px; }
+  .waiver-controls { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .waiver-controls .field { min-width: 0; }
+  .waiver-controls fieldset { flex-wrap: wrap; gap: 10px; }
+  .waiver-quality, .waiver-comparison { grid-template-columns: minmax(0, 1fr); }
+  .waiver-roster-card { grid-template-columns: auto minmax(0, 1fr); }
+  .waiver-roster-evidence { grid-column: 2; }
+  .waiver-samples { grid-template-columns: minmax(0, 1fr); }
+  .waiver-component-list { columns: 1; }
+  .waiver-heading .button { width: 100%; }
+}

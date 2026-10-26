@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -23,7 +24,10 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
     suffix = uuid4().hex[:12]
     league_key = f"nba.read.{suffix}"
     team_key = f"{league_key}.t.1"
+    stale_team_key = f"{league_key}.t.2"
+    not_imported_team_key = f"{league_key}.t.3"
     yahoo_player_id = f"read-{suffix}"
+    source_as_of = datetime(2026, 10, 19, tzinfo=timezone.utc)
     source_settings = {
         "fantasy_content": {
             "league": [
@@ -71,6 +75,7 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
                         league_name="Read Contract Fixture",
                         season=2026,
                         source_payload={"league_key": league_key},
+                        imported_at=source_as_of,
                     )
                 )
                 session.add(
@@ -79,6 +84,7 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
                         scoring_settings={"scoring_type": "head", "categories": []},
                         roster_positions=[{"position": "C", "count": "1"}],
                         source_payload=source_settings,
+                        imported_at=source_as_of,
                     )
                 )
                 session.add(
@@ -87,6 +93,25 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
                         league_key=league_key,
                         team_name="Read Fixture Team",
                         source_payload={"team_key": team_key},
+                        imported_at=source_as_of,
+                    )
+                )
+                session.add(
+                    Team(
+                        team_key=stale_team_key,
+                        league_key=league_key,
+                        team_name="Stale Fixture Team",
+                        source_payload={"team_key": stale_team_key},
+                        imported_at=source_as_of + timedelta(hours=1),
+                    )
+                )
+                session.add(
+                    Team(
+                        team_key=not_imported_team_key,
+                        league_key=league_key,
+                        team_name="Unimported Fixture Team",
+                        source_payload={"team_key": not_imported_team_key},
+                        imported_at=source_as_of,
                     )
                 )
                 identity = PlayerIdentity(
@@ -104,6 +129,16 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
                         league_key=league_key,
                         team_name="Read Fixture Team",
                         source_payload={"team_key": team_key},
+                        imported_at=source_as_of,
+                    )
+                )
+                session.add(
+                    FantasyTeam(
+                        team_key=stale_team_key,
+                        league_key=league_key,
+                        team_name="Stale Fixture Team",
+                        source_payload={"team_key": stale_team_key},
+                        imported_at=source_as_of,
                     )
                 )
                 session.add(
@@ -140,6 +175,8 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
             "league_key",
             "league_name",
             "season",
+            "league_imported_at",
+            "settings_imported_at",
             "draft_pick_time_seconds",
             "scoring_settings",
             "roster_positions",
@@ -158,7 +195,20 @@ def test_player_and_league_read_routes_use_postgres_only(monkeypatch) -> None:
         assert player_response.status_code == 200
         assert player_response.json()["id"] == internal_id
         assert rosters_response.status_code == 200
-        assert rosters_response.json()[0]["players"][0]["id"] == internal_id
+        rosters = {roster["team_key"]: roster for roster in rosters_response.json()}
+        assert set(rosters) == {team_key, stale_team_key, not_imported_team_key}
+        assert rosters[team_key]["roster_data_status"] == "available"
+        assert rosters[team_key]["roster_source"] == "yahoo"
+        assert datetime.fromisoformat(
+            rosters[team_key]["roster_as_of"].replace("Z", "+00:00")
+        ) == source_as_of
+        assert rosters[team_key]["players"][0]["id"] == internal_id
+        assert rosters[stale_team_key]["roster_data_status"] == "stale"
+        assert rosters[stale_team_key]["players"] == []
+        assert rosters[not_imported_team_key]["roster_data_status"] == "not_imported"
+        assert rosters[not_imported_team_key]["roster_source"] is None
+        assert rosters[not_imported_team_key]["roster_as_of"] is None
+        assert rosters[not_imported_team_key]["players"] == []
     finally:
         async def cleanup() -> None:
             async with SessionFactory() as session:

@@ -9,6 +9,8 @@ from app.features.draft.router import router as draft_router
 from app.features.draft.router import v2_router as draft_v2_router
 from app.features.draft.browser_observer import router as browser_observer_router
 from app.features.draft.observer_connection import router as observer_connection_router
+from app.features.championship.router import router as championship_router
+from app.features.waivers.router import router as waivers_router
 from app.features.leagues.router import router as league_router
 from app.features.leagues.router import single_league_router
 from app.features.nba.router import router as nba_router
@@ -34,6 +36,8 @@ app.include_router(draft_router)
 app.include_router(draft_v2_router)
 app.include_router(browser_observer_router)
 app.include_router(observer_connection_router)
+app.include_router(championship_router)
+app.include_router(waivers_router)
 app.include_router(league_router)
 app.include_router(single_league_router)
 app.include_router(players_router)

@@ -10,7 +10,10 @@ import type {
   TargetStatus,
   DraftSyncResult,
   DraftSyncState,
+  TeamCategoryBaseline,
+  YahooRosterBaseline,
 } from "./types";
+import type { WaiverBoard, WaiverImpact, WaiverMode, TransactionAnalysis } from "./waiverTypes";
 
 export type MockRehearsalAction =
   | "normal" | "fast" | "step_one_pick" | "deliver_next_snapshot" | "pause_source"
@@ -22,10 +25,12 @@ export type MockRehearsalAction =
 
 export class ApiError extends Error {
   status: number;
+  mismatches: string[];
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, mismatches: string[] = []) {
     super(message);
     this.status = status;
+    this.mismatches = mismatches;
   }
 }
 
@@ -38,19 +43,67 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (cause) {
+      if (!(cause instanceof SyntaxError)) throw cause;
+      if (response.ok) throw new Error("The server returned an invalid response.");
+    }
+  }
   if (!response.ok) {
-    const detail = payload?.detail;
-    const message = typeof detail === "string" ? detail : detail?.reason_code ?? response.statusText;
-    throw new ApiError(response.status, message || "The request could not be completed.");
+    const body = typeof payload === "object" && payload !== null
+      ? payload as { detail?: unknown }
+      : null;
+    const detail = body?.detail;
+    if (typeof detail === "string") {
+      throw new ApiError(response.status, detail || response.statusText || "The request could not be completed.");
+    }
+    const structured = typeof detail === "object" && detail !== null
+      ? detail as Record<string, unknown>
+      : null;
+    const mismatches = Array.isArray(structured?.mismatches)
+      ? structured.mismatches.filter((item): item is string => typeof item === "string")
+      : [];
+    const messageParts = [
+      structured?.message,
+      structured?.reason_code,
+      structured?.reason,
+      ...mismatches,
+    ].filter((part): part is string => typeof part === "string" && part.length > 0);
+    const message = messageParts.length
+      ? [...new Set(messageParts)].join(" · ")
+      : text.trim() || response.statusText || "The request could not be completed.";
+    throw new ApiError(response.status, message, mismatches);
   }
   return payload as T;
 }
 
 export const api = {
+  getWaivers: (mode: WaiverMode, signal?: AbortSignal) =>
+    request<WaiverBoard>(`/api/v1/waivers?${new URLSearchParams({ mode })}`, { signal }),
+  getWaiverTransactions: (mode: WaiverMode, signal?: AbortSignal) =>
+    request<TransactionAnalysis>(`/api/v1/waivers/transactions?${new URLSearchParams({ mode })}`, { signal }),
+  getWaiverReplacements: (dropPlayerId: number, mode: WaiverMode, signal?: AbortSignal) =>
+    request<WaiverBoard>(`/api/v1/waivers/replacements?${new URLSearchParams({
+      drop_player_id: String(dropPlayerId), mode,
+    })}`, { signal }),
+  getWaiverImpact: (playerId: number, mode: WaiverMode, dropPlayerId?: number, signal?: AbortSignal) =>
+    request<WaiverImpact>(`/api/v1/waivers/${playerId}/impact?${new URLSearchParams({
+      mode,
+      ...(dropPlayerId !== undefined ? { drop_player_id: String(dropPlayerId) } : {}),
+    })}`, { signal }),
   getLeagues: () => request<League[]>("/api/v1/leagues"),
   getLeague: (leagueKey: string, signal?: AbortSignal) =>
     request<League>(`/api/v1/league?league_key=${encodeURIComponent(leagueKey)}`, { signal }),
+  getRosters: (leagueKey: string, signal?: AbortSignal) =>
+    request<YahooRosterBaseline[]>(`/api/v1/rosters?league_key=${encodeURIComponent(leagueKey)}`, { signal }),
+  getTeamCategoryBaseline: (leagueKey: string, signal?: AbortSignal) =>
+    request<TeamCategoryBaseline>(
+      `/api/v1/team-category-baseline?league_key=${encodeURIComponent(leagueKey)}`,
+      { signal },
+    ),
   getSessions: () => request<DraftSession[]>("/api/v2/draft/sessions"),
   getMockSessions: () => request<DraftSession[]>("/api/v2/draft/mock-sessions"),
   deleteMockSession: (sessionId: string) =>
